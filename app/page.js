@@ -492,6 +492,60 @@ export default function Home() {
     );
   }
 
+  const needsEmailVerification =
+    auth.user &&
+    auth.user.providerData?.some(provider => provider.providerId === 'password') &&
+    !auth.user.emailVerified;
+
+  if (needsEmailVerification) {
+    return (
+      <>
+      <style>{`.toast{position:fixed;left:50%;bottom:40px;transform:translateX(-50%);background:#33FFCC;color:#0a1e27;padding:11px 18px;border-radius:999px;font-weight:800;z-index:40;white-space:nowrap}`}</style>
+      <div style={{
+        minHeight: '100dvh',
+        background: 'radial-gradient(ellipse at 70% 0%, rgba(51,255,204,.14) 0%, transparent 50%), #1A2F3C',
+        color: '#fff',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 24,
+        fontFamily: 'DM Sans, system-ui, sans-serif'
+      }}>
+        <div style={{
+          width: '100%',
+          maxWidth: 390,
+          background: 'rgba(31,54,71,.86)',
+          border: '1px solid rgba(51,235,195,.18)',
+          borderRadius: 24,
+          padding: 22,
+          textAlign: 'center'
+        }}>
+          <div style={{ fontSize: 42, marginBottom: 10 }}>📩</div>
+          <h1 style={{ margin: '0 0 8px', fontSize: 24 }}>Verificá tu correo</h1>
+          <p style={{ color: 'rgba(255,255,255,.6)', lineHeight: 1.45, marginBottom: 18 }}>
+            Te enviamos un email a <b>{auth.user.email}</b>. Abrilo y confirmá tu cuenta para empezar a usar Kuento.
+          </p>
+          <button style={{ width: "100%", border: 0, borderRadius: 16, padding: 15, fontWeight: 900, background: "linear-gradient(135deg,#33EBC3,#33FFCC)", color: "#0a1e27", marginBottom: 10 }} onClick={async () => {
+            await auth.refreshUser();
+            if (auth.user.emailVerified) notify('✅ Email verificado');
+            else notify('Todavía no aparece verificado');
+          }}>
+            Ya verifiqué mi correo
+          </button>
+          <button style={{ width: "100%", border: "1px solid rgba(51,235,195,.2)", borderRadius: 16, padding: 15, fontWeight: 800, background: "#1f3647", color: "#fff", marginBottom: 10 }} onClick={async () => {
+            const ok = await auth.resendVerification();
+            if (ok) notify('📩 Email reenviado');
+          }}>
+            Reenviar correo de verificación
+          </button>
+          <button style={{ width: "100%", border: "1px solid rgba(51,235,195,.2)", borderRadius: 16, padding: 15, fontWeight: 800, background: "#1f3647", color: "#fff" }} onClick={auth.logout}>Usar otra cuenta</button>
+        </div>
+        {toast && <div className="toast">{toast}</div>}
+      </div>
+      </>
+    );
+  }
+
   if (!auth.user) {
     return <LoginScreen {...auth} />;
   }
@@ -1176,16 +1230,32 @@ export default function Home() {
           </>
         )}
 
-        {/* ── SETTINGS ── */}
+        {/* ── PROFILE ── */}
         {screen === 'settings' && (
           <>
             <div className="top">
               <button className="iconbtn" onClick={() => navigate('home')}>←</button>
-              <span style={{ fontWeight: 700, fontSize: 17 }}>Configuración</span>
+              <span style={{ fontWeight: 700, fontSize: 17 }}>Perfil</span>
               <span />
             </div>
 
-            <div className="card form">
+            <div className="card" style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+              {auth.user.photoURL ? (
+                <img src={auth.user.photoURL} alt="" referrerPolicy="no-referrer" style={{ width: 54, height: 54, borderRadius: '50%' }} />
+              ) : (
+                <div style={{ width: 54, height: 54, borderRadius: '50%', background: 'var(--surface2)', display: 'grid', placeItems: 'center', fontSize: 24 }}>👤</div>
+              )}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 900, fontSize: 16 }}>{auth.user.displayName || 'Usuario Kuento'}</div>
+                <div className="small">{auth.user.email}</div>
+                <div className="small" style={{ color: auth.user.emailVerified ? 'var(--neon)' : 'var(--red)' }}>
+                  {auth.user.emailVerified ? '✓ Email verificado' : '⚠️ Email sin verificar'}
+                </div>
+              </div>
+            </div>
+
+            <div className="card form" style={{ marginBottom: 12 }}>
+              <div className="label">Presupuesto</div>
               <div className="field">
                 <label className="label">Presupuesto mensual ($)</label>
                 <input className="input" inputMode="numeric" value={settings.budget} onChange={e => setSettings({ ...settings, budget: Number(e.target.value || 0) })} />
@@ -1197,13 +1267,50 @@ export default function Home() {
               </div>
 
               <button className="primary" onClick={saveBudgetSettings}>✅ Guardar configuración</button>
+            </div>
+
+            <div className="card form" style={{ marginBottom: 12 }}>
+              <div className="label">Seguridad</div>
+
+              {!auth.user.emailVerified && auth.user.providerData?.some(provider => provider.providerId === 'password') && (
+                <button className="secondary" onClick={async () => {
+                  const ok = await auth.resendVerification();
+                  if (ok) notify('📩 Email de verificación enviado');
+                }}>
+                  Reenviar verificación de email
+                </button>
+              )}
+
+              <button className="secondary" onClick={async () => {
+                const ok = await auth.resetPassword(auth.user.email);
+                if (ok) notify('📩 Email para restablecer contraseña enviado');
+              }}>
+                🔐 Restablecer contraseña
+              </button>
+
               {auth.biometricOk && !auth.hasBiometric && (
                 <button className="secondary" onClick={async () => {
                   const ok = await auth.enableBiometric();
                   if (ok) notify('✅ Face ID / Huella activado');
-                }}>🔒 Activar Face ID / Huella</button>
+                }}>
+                  🔒 Activar Face ID / Huella
+                </button>
               )}
-              <button className="secondary" onClick={auth.logout}>Cerrar sesión</button>
+
+              {auth.hasBiometric && (
+                <div className="card" style={{ background: 'rgba(51,235,195,.08)', boxShadow: 'none' }}>
+                  🔒 Face ID / Huella activado en este dispositivo
+                </div>
+              )}
+            </div>
+
+            <div className="card form">
+              <div className="label">Datos</div>
+              <button className="secondary" onClick={exportCSV}>📥 Descargar CSV</button>
+              <button className="secondary" onClick={backupJSON}>💾 Descargar backup JSON</button>
+              <button className="secondary" onClick={() => restoreRef.current.click()}>♻️ Restaurar backup</button>
+              <input hidden ref={restoreRef} type="file" accept="application/json" onChange={e => restoreJSON(e.target.files?.[0])} />
+              <button className="danger-btn" onClick={auth.logout}>Cerrar sesión</button>
             </div>
           </>
         )}
@@ -1217,6 +1324,7 @@ export default function Home() {
           <button onClick={startCamera}><b>📷</b>QR</button>
           <button onClick={() => navigate('history')}><b>📋</b>Historial</button>
           <button onClick={() => navigate('stats')}><b>📊</b>Stats</button>
+          <button onClick={() => navigate('settings')}><b>👤</b>Perfil</button>
         </nav>
       )}
     </>
