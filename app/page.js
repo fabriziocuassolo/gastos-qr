@@ -1,6 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useAuth } from '../lib/useAuth';
+import { useExpenses } from '../lib/useExpenses';
+import { LoginScreen } from '../lib/LoginScreen';
 
 const CATS = [
   ['🍔','Comida'], ['🚗','Transporte'], ['🛒','Compras'], ['🏥','Salud'],
@@ -220,9 +223,18 @@ function KuentoLogo({ size = 32 }) {
 }
 
 export default function Home() {
+  const auth = useAuth();
+  const {
+    expenses,
+    settings,
+    ready,
+    addExpense,
+    removeExpense,
+    saveSettings,
+    setSettings
+  } = useExpenses(auth.user?.uid);
+
   const [screen, setScreen] = useState('home');
-  const [expenses, setExpenses] = useState([]);
-  const [settings, setSettings] = useState({ budget: 0, alertPct: 80 });
   const [form, setForm] = useState({
     amount: '', place: '', date: today(), category: '❓ Otro',
     method: 'Manual', qrData: '', lat: null, lng: null
@@ -240,14 +252,6 @@ export default function Home() {
   const processingRef = useRef(false);
   const fileRef = useRef(null);
   const restoreRef = useRef(null);
-
-  useEffect(() => {
-    setExpenses(JSON.parse(localStorage.getItem('gq_expenses_v2') || localStorage.getItem('gq_expenses') || '[]'));
-    setSettings(JSON.parse(localStorage.getItem('gq_settings_v2') || '{"budget":0,"alertPct":80}'));
-  }, []);
-
-  useEffect(() => { localStorage.setItem('gq_expenses_v2', JSON.stringify(expenses)); }, [expenses]);
-  useEffect(() => { localStorage.setItem('gq_settings_v2', JSON.stringify(settings)); }, [settings]);
 
   useEffect(() => {
     if (toast) {
@@ -408,10 +412,10 @@ export default function Home() {
     return { ...form, id: Date.now(), amount, place: form.place.trim(), method: methodOverride || form.method || 'Manual' };
   }
 
-  function saveExpense() {
+  async function saveExpense() {
     const item = buildExpense('Manual');
     if (!item) return;
-    setExpenses([item, ...expenses]);
+    await addExpense(item);
     notify('Gasto guardado');
     setScreen('home');
   }
@@ -433,17 +437,17 @@ export default function Home() {
     }, 350);
   }
 
-  function saveAndOpenPayment(app) {
+  async function saveAndOpenPayment(app) {
     const method = app === 'nx' ? 'NaranjaX' : 'Mercado Pago';
     const item = buildExpense(method);
     if (!item) return;
-    setExpenses([item, ...expenses]);
+    await addExpense(item);
     openPaymentApp(app);
     setTimeout(() => setScreen('home'), 500);
   }
 
-  function del(id) {
-    if (confirm('¿Eliminar este gasto?')) setExpenses(expenses.filter(e => e.id !== id));
+  async function del(id) {
+    if (confirm('¿Eliminar este gasto?')) await removeExpense(id);
   }
 
   function exportCSV() {
@@ -458,24 +462,46 @@ export default function Home() {
     downloadFile(`backup-kuento-${today()}.json`, JSON.stringify({ version: 2, exportedAt: new Date().toISOString(), settings, expenses }, null, 2), 'application/json');
   }
 
-  function saveBudgetSettings() {
-    localStorage.setItem('gq_settings_v2', JSON.stringify(settings));
+  async function saveBudgetSettings() {
+    await saveSettings(settings);
     notify('✅ Presupuesto fijado correctamente');
   }
 
   function restoreJSON(file) {
     if (!file) return;
     const r = new FileReader();
-    r.onload = () => {
+    r.onload = async () => {
       try {
         const data = JSON.parse(r.result);
         if (!Array.isArray(data.expenses)) throw Error();
-        setExpenses(data.expenses);
-        if (data.settings) setSettings(data.settings);
+        for (const expense of data.expenses) await addExpense(expense);
+        if (data.settings) await saveSettings(data.settings);
         notify('Backup restaurado');
       } catch { notify('Backup inválido'); }
     };
     r.readAsText(file);
+  }
+
+
+  if (auth.user === undefined) {
+    return (
+      <div style={{ minHeight: '100dvh', background: '#1A2F3C', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ width: 44, height: 44, border: '3px solid rgba(51,255,204,.22)', borderTopColor: '#33FFCC', borderRadius: '50%', animation: 'spin .8s linear infinite' }} />
+        <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      </div>
+    );
+  }
+
+  if (!auth.user) {
+    return <LoginScreen {...auth} />;
+  }
+
+  if (!ready) {
+    return (
+      <div style={{ minHeight: '100dvh', background: '#1A2F3C', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#33FFCC', fontFamily: 'system-ui' }}>
+        Cargando Kuento...
+      </div>
+    );
   }
 
   return (
@@ -1004,6 +1030,18 @@ export default function Home() {
               <span />
             </div>
 
+            <div className="card" style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+              {auth.user.photoURL ? (
+                <img src={auth.user.photoURL} alt="" referrerPolicy="no-referrer" style={{ width: 48, height: 48, borderRadius: '50%' }} />
+              ) : (
+                <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'var(--surface2)', display: 'grid', placeItems: 'center' }}>👤</div>
+              )}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 800 }}>{auth.user.displayName || 'Usuario'}</div>
+                <div className="small">{auth.user.email}</div>
+              </div>
+            </div>
+
             <div className="card form">
               <div className="field">
                 <label className="label">Monto</label>
@@ -1147,6 +1185,13 @@ export default function Home() {
               </div>
 
               <button className="primary" onClick={saveBudgetSettings}>✅ Guardar configuración</button>
+              {auth.biometricOk && !auth.hasBiometric && (
+                <button className="secondary" onClick={async () => {
+                  const ok = await auth.enableBiometric();
+                  if (ok) notify('✅ Face ID / Huella activado');
+                }}>🔒 Activar Face ID / Huella</button>
+              )}
+              <button className="secondary" onClick={auth.logout}>Cerrar sesión</button>
             </div>
           </>
         )}
