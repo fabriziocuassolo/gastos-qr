@@ -708,7 +708,7 @@ export default function Home() {
         {screen === 'home' && (
           <>
             <div className="top">
-              <div className="brand"><img src="/imagotipo.png" style="height:28px"/></div>
+              <div className="brand"><img src="/imagotipo.png" alt="Kuento" style={{ height: 28 }} /></div>
               <button className="iconbtn" onClick={() => navigate('settings')}>⚙️</button>
             </div>
 
