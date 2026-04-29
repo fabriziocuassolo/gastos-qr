@@ -36,6 +36,7 @@ export default function Home() {
   const [to, setTo] = useState('');
   const [cameraOn, setCameraOn] = useState(false);
   const videoRef = useRef(null);
+  const qrRef = useRef(null);
   const streamRef = useRef(null);
   const loopRef = useRef(null);
   const fileRef = useRef(null);
@@ -48,7 +49,7 @@ export default function Home() {
   useEffect(() => { localStorage.setItem('gq_expenses_v2', JSON.stringify(expenses)); }, [expenses]);
   useEffect(() => { localStorage.setItem('gq_settings_v2', JSON.stringify(settings)); }, [settings]);
   useEffect(() => { if (toast) { const t = setTimeout(()=>setToast(''), 2400); return () => clearTimeout(t); }}, [toast]);
-  useEffect(() => () => stopCamera(false), []);
+  useEffect(() => () => { stopCamera(false); }, []);
 
   const thisMonth = useMemo(() => expenses.filter(e => monthKey(e.date) === monthKey()), [expenses]);
   const monthTotal = useMemo(() => thisMonth.reduce((s,e)=>s+Number(e.amount||0),0), [thisMonth]);
@@ -65,152 +66,98 @@ export default function Home() {
   function notify(msg) { setToast(msg); }
   function navigate(s) { stopCamera(false); setScreen(s); }
 
-  function parseTLV(value='') {
-    const result = {};
+  function parseTLV(str='') {
+    const out = {};
     let i = 0;
-
-    while (i + 4 <= value.length) {
-      const id = value.slice(i, i + 2);
-      const lenText = value.slice(i + 2, i + 4);
-
-      if (!/^\d{2}$/.test(id) || !/^\d{2}$/.test(lenText)) break;
-
-      const len = Number(lenText);
-      const start = i + 4;
-      const end = start + len;
-
-      if (len < 0 || end > value.length) break;
-
-      const val = value.slice(start, end);
-      result[id] = val;
-
-      // Merchant Account Information / Additional Data templates can contain nested TLV.
-      if ((Number(id) >= 26 && Number(id) <= 51) || id === '62' || id === '64' || id === '80') {
-        const nested = parseTLV(val);
-        if (Object.keys(nested).length) result[id + '_parsed'] = nested;
-      }
-
-      i = end;
+    while (i + 4 <= str.length) {
+      const id = str.slice(i, i + 2);
+      const len = Number(str.slice(i + 2, i + 4));
+      if (!/^\d{2}$/.test(id) || !Number.isFinite(len) || len < 0) break;
+      const value = str.slice(i + 4, i + 4 + len);
+      if (value.length !== len) break;
+      out[id] = value;
+      i += 4 + len;
     }
-
-    return result;
+    return out;
   }
 
-  function findNestedValue(parsed, keys=[]) {
-    for (const key of keys) {
-      if (parsed[key]) return parsed[key];
-    }
-
-    for (const [k, v] of Object.entries(parsed)) {
-      if (k.endsWith('_parsed') && v && typeof v === 'object') {
-        for (const key of keys) {
-          if (v[key]) return v[key];
-        }
+  function findNestedValue(fields, targetIds=[]) {
+    for (const [id, value] of Object.entries(fields || {})) {
+      if (targetIds.includes(id)) return value;
+      if (/^\d+$/.test(value.slice(0, 4))) {
+        const nested = parseTLV(value);
+        const hit = findNestedValue(nested, targetIds);
+        if (hit) return hit;
       }
     }
-
     return '';
   }
 
-  function parsePaymentQR(text='') {
+  function inferFromText(text='') {
     const raw = String(text || '').trim();
-    const decodedRaw = safeDecode(raw);
-
-    // 1) QR de prueba / URLs con query params.
-    try {
-      const paramSource = decodedRaw.includes('?') ? decodedRaw.split('?').slice(1).join('?') : decodedRaw;
-      const params = new URLSearchParams(paramSource);
-
-      const pMonto = params.get('monto') || params.get('amount') || params.get('importe') || params.get('total') || params.get('transaction_amount');
-      const pComercio = params.get('comercio') || params.get('merchant') || params.get('merchant_name') || params.get('lugar') || params.get('place');
-      const pCategoria = params.get('categoria') || params.get('category');
-
-      if (pMonto || pComercio || pCategoria) {
-        return {
-          amount: pMonto ? String(pMonto).replace(',', '.') : '',
-          place: pComercio || '',
-          category: pCategoria ? catLabel(pCategoria) : '',
-          rawType: 'query'
-        };
-      }
-    } catch {}
-
-    // 2) QR EMVCo / Transferencias 3.0: ID + longitud + valor.
-    // Campos estándar útiles:
-    // 54 = monto, 59 = nombre comercio, 60 = ciudad, 52 = MCC, 53 = moneda, 58 = país, 62 = datos adicionales.
-    const cleaned = decodedRaw.replace(/\s/g, '');
-    const looksLikeEMV = /^000201/.test(cleaned) || /^0002/.test(cleaned) || /(^|\D)540[0-9]/.test(cleaned);
-
-    if (looksLikeEMV) {
-      const parsed = parseTLV(cleaned);
-
-      const amount = parsed['54'] || '';
-      const merchantName = parsed['59'] || '';
-      const merchantCity = parsed['60'] || '';
-
-      // En algunos QR el nombre puede venir dentro de templates 26-51 o datos adicionales 62.
-      const nestedMerchant = findNestedValue(parsed, ['59', '01', '02', '03']);
-      const additionalLabel = parsed['62_parsed'] ? findNestedValue(parsed['62_parsed'], ['05', '07', '08']) : '';
-
-      return {
-        amount: amount ? String(amount).replace(',', '.') : '',
-        place: merchantName || nestedMerchant || additionalLabel || merchantCity || 'Comercio QR',
-        category: '',
-        rawType: 'emv',
-        emv: parsed
-      };
-    }
-
-    // 3) Texto suelto común.
-    const amountPatterns = [
-      /(?:monto|amount|total|importe|value|valor)[=: ]+\$?\s*([0-9]+(?:[\.,][0-9]{1,2})?)/i,
-      /\$\s*([0-9]+(?:[\.,][0-9]{1,2})?)/i
-    ];
-
-    let amount = '';
-    for (const p of amountPatterns) {
-      const m = decodedRaw.match(p);
-      if (m) {
-        amount = m[1].replace(',', '.');
-        break;
-      }
-    }
+    const decodedRaw = (() => { try { return decodeURIComponent(raw); } catch { return raw; }})();
+    const decoded = decodedRaw.toLowerCase();
 
     let place = '';
+    let amount = '';
+    let category = '❓ Otro';
+
+    // 1) QR de prueba / query params: monto=2500&comercio=Kiosco&categoria=Comida
     try {
-      const u = new URL(decodedRaw);
-      place = u.hostname.replace('www.', '');
-    } catch {
-      place = decodedRaw.slice(0, 44);
+      const paramsText = raw.includes('?') ? raw.split('?').slice(1).join('?') : raw;
+      const params = new URLSearchParams(paramsText);
+
+      const pMonto = params.get('monto') || params.get('amount') || params.get('importe') || params.get('total') || params.get('value');
+      const pComercio = params.get('comercio') || params.get('merchant') || params.get('lugar') || params.get('place') || params.get('name');
+      const pCategoria = params.get('categoria') || params.get('category');
+
+      if (pMonto) amount = String(pMonto).replace(',', '.');
+      if (pComercio) place = pComercio;
+      if (pCategoria) category = catLabel(pCategoria);
+    } catch {}
+
+    // 2) QR EMV/TLV de pagos: ID 54=monto, 59=comercio, 60=ciudad
+    if (!amount || !place) {
+      const compact = raw.replace(/\s+/g, '');
+      if (/^000201/.test(compact) || /^0002/.test(compact)) {
+        const fields = parseTLV(compact);
+
+        const emvAmount = fields['54'] || findNestedValue(fields, ['54']);
+        const emvMerchant = fields['59'] || findNestedValue(fields, ['59']);
+        const emvCity = fields['60'] || findNestedValue(fields, ['60']);
+
+        if (!amount && emvAmount) amount = String(emvAmount).replace(',', '.');
+        if (!place && emvMerchant) place = emvMerchant;
+        if (!place && emvCity) place = emvCity;
+      }
     }
 
-    return { amount, place, category: '', rawType: 'text' };
-  }
+    // 3) Texto suelto común
+    if (!amount) {
+      const amountPatterns = [
+        /(?:monto|amount|total|importe|value)[=: ]+\$?\s*([0-9]+(?:[\.,][0-9]{1,2})?)/i,
+        /\$\s*([0-9]+(?:[\.,][0-9]{1,2})?)/i
+      ];
+      for (const p of amountPatterns) {
+        const m = decodedRaw.match(p);
+        if (m) { amount = m[1].replace(',', '.'); break; }
+      }
+    }
 
-  function safeDecode(value='') {
-    try { return decodeURIComponent(value); } catch { return value; }
-  }
+    if (!place) {
+      try { const u = new URL(raw); place = u.hostname.replace('www.',''); }
+      catch { place = decodedRaw.slice(0,44); }
+    }
 
-  function inferFromText(text='') {
-    const raw = String(text || '');
-    const decoded = safeDecode(raw).toLowerCase();
-    const parsed = parsePaymentQR(raw);
-
-    let place = parsed.place || '';
-    let amount = parsed.amount || '';
-    let category = parsed.category || '❓ Otro';
-
-    // Si no encontró categoría explícita, intenta inferir por comercio/texto.
-    if (!category || category === '❓ Otro') {
+    if (category === '❓ Otro') {
       Object.entries(CAT_RULES).forEach(([cat, words]) => {
-        if (words.some(w => decoded.includes(w) || String(place).toLowerCase().includes(w))) {
-          category = catLabel(cat);
-        }
+        if (words.some(w => decoded.includes(w) || String(place).toLowerCase().includes(w))) category = catLabel(cat);
       });
     }
 
-    return { place, amount, category: category || '❓ Otro' };
+    return { place, amount, category };
   }
+
   function updatePlace(v) {
     let category = form.category;
     const low = v.toLowerCase();
@@ -224,52 +171,90 @@ export default function Home() {
     setScreen('confirm');
   }
 
-  async function startCamera() {
-    setScreen('scan'); setCameraOn(true);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-      streamRef.current = stream;
-      videoRef.current.srcObject = stream;
-      await videoRef.current.play();
-      scanTick();
-    } catch { notify('Sin permiso de cámara. Probá subir imagen del QR.'); }
+  async function waitForQRLib() {
+    for (let i = 0; i < 30; i++) {
+      if (window.Html5Qrcode) return true;
+      await new Promise(r => setTimeout(r, 100));
+    }
+    return false;
   }
-  function stopCamera(goHome=false) {
+
+  async function startCamera() {
+    setScreen('scan');
+    setCameraOn(true);
+
+    const ok = await waitForQRLib();
+    if (!ok) {
+      notify('No cargó el lector QR. Recargá la página.');
+      return;
+    }
+
+    try {
+      await new Promise(r => setTimeout(r, 120));
+      if (qrRef.current) {
+        try { await qrRef.current.stop(); } catch {}
+        try { await qrRef.current.clear(); } catch {}
+      }
+
+      const scanner = new window.Html5Qrcode('qr-reader');
+      qrRef.current = scanner;
+
+      await scanner.start(
+        { facingMode: 'environment' },
+        { fps: 12, qrbox: { width: 260, height: 260 }, aspectRatio: 1.0 },
+        (decodedText) => {
+          stopCamera(false);
+          openConfirm(decodedText);
+        },
+        () => {}
+      );
+    } catch (err) {
+      notify('No pude iniciar el lector. Probá subir imagen del QR.');
+    }
+  }
+
+  async function stopCamera(goHome=false) {
     if (loopRef.current) cancelAnimationFrame(loopRef.current);
-    loopRef.current = null; setCameraOn(false);
+    loopRef.current = null;
+    setCameraOn(false);
+
+    if (qrRef.current) {
+      try { await qrRef.current.stop(); } catch {}
+      try { await qrRef.current.clear(); } catch {}
+      qrRef.current = null;
+    }
+
     if (streamRef.current) streamRef.current.getTracks().forEach(t=>t.stop());
     streamRef.current = null;
     if (goHome) setScreen('home');
   }
-  function scanTick() {
-    const video = videoRef.current;
-    if (!video || !window.jsQR || video.readyState < 2) { loopRef.current = requestAnimationFrame(scanTick); return; }
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-    const ctx = canvas.getContext('2d'); ctx.drawImage(video, 0, 0);
-    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const code = window.jsQR(img.data, img.width, img.height);
-    if (code?.data) { stopCamera(false); openConfirm(code.data); }
-    else loopRef.current = requestAnimationFrame(scanTick);
-  }
-  function readQRImage(file) {
+
+  async function readQRImage(file) {
     if (!file) return;
-    const img = new Image(); const url = URL.createObjectURL(file);
-    img.onload = () => {
-      const canvas = document.createElement('canvas'); canvas.width = img.width; canvas.height = img.height;
-      const ctx = canvas.getContext('2d'); ctx.drawImage(img, 0, 0);
-      const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const code = window.jsQR?.(data.data, data.width, data.height);
-      URL.revokeObjectURL(url); stopCamera(false);
-      if (code?.data) openConfirm(code.data); else { openConfirm(''); notify('No pude leer el QR. Cargalo manual.'); }
-    };
-    img.src = url;
+
+    const ok = await waitForQRLib();
+    if (!ok) {
+      notify('No cargó el lector QR. Recargá la página.');
+      return;
+    }
+
+    try {
+      await stopCamera(false);
+      const scanner = new window.Html5Qrcode('qr-file-reader');
+      const decodedText = await scanner.scanFile(file, true);
+      try { scanner.clear(); } catch {}
+      openConfirm(decodedText);
+    } catch (err) {
+      openConfirm('');
+      notify('No pude leer el QR. Probá con más luz o cargalo manual.');
+    }
   }
+
   function buildExpense(methodOverride) {
     const amount = Number(String(form.amount).replace(',','.'));
     if (!amount || amount <= 0) { notify('Ingresá un monto válido'); return null; }
     if (!form.place.trim()) { notify('Ingresá el comercio/lugar'); return null; }
-    return { ...form, id: Date.now(), amount, place: form.place.trim(), method: methodOverride || form.method };
+    return { ...form, id: Date.now(), amount, place: form.place.trim(), method: methodOverride || 'Manual' };
   }
 
   function saveExpense() {
@@ -339,7 +324,7 @@ export default function Home() {
   }, [expenses, settings, monthTotal, budgetPct, catTotals]);
 
   return <>
-    <Script src="https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.min.js" strategy="afterInteractive" />
+    <Script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js" strategy="afterInteractive" />
     <style>{`
       :root{--bg:#070707;--surface:#121212;--surface2:#1b1b1b;--ink:#f6f3ed;--muted:#a6a09a;--border:#2b2b2b;--orange:#ff6b2b;--green:#00d084;--red:#ff4d4d;--shadow:0 18px 60px rgba(0,0,0,.35)}
       *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif} button,input,select{font:inherit} .app{min-height:100dvh;padding:calc(env(safe-area-inset-top) + 18px) 18px 96px;background:radial-gradient(circle at 80% 0%,rgba(255,107,43,.18),transparent 30%),radial-gradient(circle at 0% 20%,rgba(0,208,132,.12),transparent 28%),var(--bg)}
@@ -358,8 +343,9 @@ export default function Home() {
 
       {screen==='scan' && <>
         <div className="top"><button className="iconbtn" onClick={()=>stopCamera(true)}>←</button><div className="title">Escanear QR</div><span/></div>
-        <div className="videoBox"><video ref={videoRef} autoPlay playsInline muted/><div className="frame"/></div>
-        <p className="muted" style={{textAlign:'center'}}>Apuntá al QR. Si no lee, subí una imagen.</p>
+        <div className="videoBox"><div id="qr-reader" style={{width:'100%',height:'100%'}}></div><div className="frame"/></div>
+        <div id="qr-file-reader" style={{display:'none'}}></div>
+        <p className="muted" style={{textAlign:'center'}}>Apuntá al QR. Si no lee, subí una imagen nítida.</p>
         <button className="secondary" style={{width:'100%'}} onClick={()=>fileRef.current.click()}>🖼️ Subir imagen del QR</button>
         <input ref={fileRef} type="file" accept="image/*" hidden onChange={e=>readQRImage(e.target.files?.[0])}/>
       </>}
@@ -369,7 +355,7 @@ export default function Home() {
         <div className="card form">
           <div className="field"><label className="label">Monto</label><input className="input" inputMode="decimal" value={form.amount} onChange={e=>setForm({...form,amount:e.target.value})} placeholder="0.00"/></div>
           <div className="field"><label className="label">Lugar / comercio</label><input className="input" value={form.place} onChange={e=>updatePlace(e.target.value)} placeholder="Kiosco, café, súper..."/></div>
-          <div className="filters"><div className="field"><label className="label">Fecha</label><input className="input" type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></div><div className="field"><label className="label">Método</label><select className="input" value={form.method} onChange={e=>setForm({...form,method:e.target.value})}><option>Mercado Pago</option><option>NaranjaX</option><option>Débito</option><option>Crédito</option><option>Efectivo</option><option>Otro</option></select></div></div>
+          <div className="field"><label className="label">Fecha</label><input className="input" type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></div>
           <div><div className="label" style={{marginBottom:8}}>Categoría</div><div className="chips">{CATS.map(([em,n])=><button key={n} className={`chip ${form.category.includes(n)?'on':''}`} onClick={()=>setForm({...form,category:`${em} ${n}`})}>{em}<br/>{n}</button>)}</div></div>
           {form.lat&&<div className="small">📍 Ubicación guardada aproximada</div>}
           <div className="paygrid">
