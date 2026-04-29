@@ -1,1 +1,16 @@
-{"scripts":{"dev":"next dev","build":"next build","start":"next start"},"dependencies":{"@vitejs/plugin-react":"latest","next":"latest","react":"latest","react-dom":"latest","lucide-react":"latest"},"devDependencies":{}}
+{
+  "name": "gastoqr",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "14.2.5",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "html5-qrcode": "^2.3.8"
+  }
+}
