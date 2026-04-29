@@ -1,12 +1,6 @@
 export const metadata = {
   title: "Kuento",
-  description: "Control inteligente de gastos con QR",
-  manifest: "/manifest.json",
-  icons: {
-    icon: "/icon.png",
-    apple: "/icon.png"
-  },
-  themeColor: "#1A2F3C"
+  description: "Kuento - control de gastos con QR",
 };
 
 export default function RootLayout({ children }) {
