@@ -537,7 +537,14 @@ export default function Home() {
           -webkit-font-smoothing: antialiased;
         }
 
-        button, input, select { font: inherit; }
+        button { font: inherit; }
+
+        input,
+        select,
+        textarea {
+          font-size: 16px !important;
+          font-family: inherit;
+        }
 
         .app {
           min-height: 100dvh;
@@ -935,6 +942,11 @@ export default function Home() {
           transition: background 0.2s;
         }
         .danger-btn:hover { background: rgba(255,87,87,0.18); }
+        input,
+        select,
+        textarea {
+          font-size: 16px !important;
+        }
       `}</style>
 
       <div id="qr-file-reader" />
