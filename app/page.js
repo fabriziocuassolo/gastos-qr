@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import Script from 'next/script';
+import { BrowserQRCodeReader } from '@zxing/browser';
 
 const CATS = [['🍔','Comida'],['🚗','Transp.'],['🛒','Compras'],['🏥','Salud'],['🎬','Ocio'],['💡','Servic.'],['🏠','Hogar'],['❓','Otro']];
 
@@ -11,7 +11,7 @@ export default function Home() {
   const [form,setForm]=useState({amount:'',place:'',date:'',category:'❓ Otro',qrData:'',app:'none'});
   const [toast,setToast]=useState('');
   const [scanMsg,setScanMsg]=useState('');
-  const videoRef=useRef(null); const streamRef=useRef(null); const rafRef=useRef(null);
+  const videoRef=useRef(null); const streamRef=useRef(null); const scannerRef=useRef(null); const controlsRef=useRef(null);
 
   useEffect(()=>{ setExpenses(JSON.parse(localStorage.getItem('gq_expenses')||'[]')); },[]);
   useEffect(()=>{ localStorage.setItem('gq_expenses',JSON.stringify(expenses)); },[expenses]);
@@ -54,32 +54,49 @@ export default function Home() {
   }
 
   async function startScan(){
-    setScreen('scan'); setScanMsg('');
+    setScreen('scan');
+    setScanMsg('Buscando QR... acercá o alejás un poquito la cámara');
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      notify('📵 Tu navegador no permite usar cámara acá. Probá desde Safari.');
+      return;
+    }
+
     try{
-      const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1280}}});
-      streamRef.current=stream;
-      videoRef.current.srcObject=stream;
-      await videoRef.current.play();
-      tickScan();
-    }catch(e){ notify('📵 No hay acceso a cámara. Probá subiendo una imagen.'); }
+      stopCamera();
+      if(!scannerRef.current) scannerRef.current = new BrowserQRCodeReader();
+      const video = videoRef.current;
+
+      controlsRef.current = await scannerRef.current.decodeFromVideoDevice(
+        undefined,
+        video,
+        function(result){
+          if(result){
+            const text = result.getText();
+            setScanMsg('QR leído ✅');
+            stopCamera();
+            openConfirm(text);
+          }
+        }
+      );
+    }catch(e){
+      console.error(e);
+      notify('📵 No pude iniciar el scanner. Probá subiendo una imagen del QR.');
+    }
   }
 
   function stopCamera(){
-    if(rafRef.current) cancelAnimationFrame(rafRef.current);
-    rafRef.current=null;
-    if(streamRef.current){ streamRef.current.getTracks().forEach(t=>t.stop()); streamRef.current=null; }
-  }
-
-  function tickScan(){
-    const video=videoRef.current;
-    if(!video || !window.jsQR){ rafRef.current=requestAnimationFrame(tickScan); return; }
-    if(video.readyState < video.HAVE_ENOUGH_DATA){ rafRef.current=requestAnimationFrame(tickScan); return; }
-    const canvas=document.createElement('canvas'); canvas.width=video.videoWidth; canvas.height=video.videoHeight;
-    const ctx=canvas.getContext('2d'); ctx.drawImage(video,0,0);
-    const img=ctx.getImageData(0,0,canvas.width,canvas.height);
-    const code=window.jsQR(img.data,img.width,img.height,{inversionAttempts:'dontInvert'});
-    if(code?.data){ setScanMsg('QR leído ✅'); stopCamera(); openConfirm(code.data); }
-    else rafRef.current=requestAnimationFrame(tickScan);
+    if(controlsRef.current){
+      try { controlsRef.current.stop(); } catch(e) {}
+      controlsRef.current = null;
+    }
+    if(streamRef.current){
+      streamRef.current.getTracks().forEach(t=>t.stop());
+      streamRef.current=null;
+    }
+    if(videoRef.current){
+      try { videoRef.current.srcObject = null; } catch(e) {}
+    }
   }
 
   function openConfirm(qrText=''){
@@ -88,18 +105,24 @@ export default function Home() {
     setScreen('confirm');
   }
 
-  function handleQRImage(e){
-    const file=e.target.files?.[0]; if(!file) return; e.target.value='';
-    const img=new Image(); const url=URL.createObjectURL(file);
-    img.onload=()=>{
-      const canvas=document.createElement('canvas'); canvas.width=img.width; canvas.height=img.height;
-      const ctx=canvas.getContext('2d'); ctx.drawImage(img,0,0);
-      const data=ctx.getImageData(0,0,canvas.width,canvas.height);
-      const code=window.jsQR?.(data.data,data.width,data.height);
-      URL.revokeObjectURL(url); stopCamera();
-      if(code?.data) openConfirm(code.data); else { notify('No pude leer ese QR. Cargá el gasto manual.'); openConfirm(''); }
-    };
-    img.src=url;
+  async function handleQRImage(e){
+    const file=e.target.files?.[0];
+    if(!file) return;
+    e.target.value='';
+    const url=URL.createObjectURL(file);
+    try{
+      stopCamera();
+      if(!scannerRef.current) scannerRef.current = new BrowserQRCodeReader();
+      const result = await scannerRef.current.decodeFromImageUrl(url);
+      if(result?.getText()) openConfirm(result.getText());
+      else throw new Error('QR no detectado');
+    }catch(err){
+      console.error(err);
+      notify('No pude leer ese QR. Probá otra foto más nítida o cargalo manual.');
+      openConfirm('');
+    }finally{
+      URL.revokeObjectURL(url);
+    }
   }
 
   function saveAndPay(app){
@@ -146,7 +169,6 @@ export default function Home() {
   const monthTotal=monthExpenses.reduce((s,e)=>s+e.amount,0);
 
   return <>
-    <Script src="https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.min.js" strategy="afterInteractive" />
     <style>{CSS}</style>
     <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
 
