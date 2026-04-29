@@ -1,6 +1,6 @@
 export const metadata = {
-  title: "GastoQR",
-  description: "Control de gastos con QR",
+  title: "Kuento",
+  description: "Kuento - control de gastos con QR",
 };
 
 export default function RootLayout({ children }) {

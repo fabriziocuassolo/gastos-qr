@@ -341,7 +341,7 @@ export default function Home() {
 
   const insights = useMemo(() => {
     const arr = [];
-    if (settings.budget && monthTotal >= settings.budget * (settings.alertPct/100)) arr.push(`Ojo: ya usaste ${budgetPct}% de tu presupuesto mensual.`);
+    if (settings.budget && monthTotal >= settings.budget * (settings.alertPct/100)) arr.push(`ALERTA: ya usaste ${budgetPct}% de tu presupuesto mensual.`);
     if (catTotals[0]) arr.push(`Tu categoría más fuerte es ${catTotals[0][0]} con $${fmt(catTotals[0][1])}.`);
     const todayTotal = expenses.filter(e=>e.date===today()).reduce((s,e)=>s+Number(e.amount||0),0);
     if (todayTotal) arr.push(`Hoy llevás gastado $${fmt(todayTotal)}.`);
@@ -613,6 +613,11 @@ export default function Home() {
     );
   }
 
+  function saveBudgetSettings() {
+    localStorage.setItem('gq_settings_v2', JSON.stringify(settings));
+    notify('✅ Presupuesto fijado correctamente');
+  }
+
   function restoreJSON(file) {
     if (!file) return;
 
@@ -688,6 +693,17 @@ export default function Home() {
         .barrow{display:grid;grid-template-columns:90px 1fr 75px;gap:10px;align-items:center;margin:10px 0}
         .bar{height:8px;border-radius:99px;background:#242424;overflow:hidden}
         .bar div{height:100%;background:var(--orange)}
+        .brand{display:inline-flex;align-items:center;gap:8px;font-weight:950;letter-spacing:-.06em}
+        .kuentoMark{width:30px;height:30px;border-radius:10px;background:linear-gradient(135deg,#10160f,#1d2a17);border:1px solid rgba(139,224,36,.45);display:inline-grid;place-items:center;box-shadow:0 0 18px rgba(139,224,36,.25)}
+        .kuentoMark svg{width:22px;height:22px;display:block;filter:drop-shadow(0 0 5px rgba(139,224,36,.45))}
+        .kuentoWord{font-size:26px;line-height:1;color:#fff}
+        .kuentoWord span{color:#8BE024}
+        .scan{background:#8BE024!important;color:#061006!important;box-shadow:0 14px 34px rgba(139,224,36,.22)!important}
+        .scan:hover{filter:brightness(.98)}
+        .insightWarning{background:linear-gradient(135deg,rgba(255,53,53,.18),rgba(255,53,53,.06))!important;border:1px solid rgba(255,53,53,.65)!important;color:#fff!important;box-shadow:0 0 0 1px rgba(255,53,53,.08),0 16px 36px rgba(255,53,53,.16)!important}
+        .insightWarning strong{color:#ff4d4d}
+        .setBudgetBtn{background:linear-gradient(135deg,#8BE024,#45d96d)!important;color:#061006!important;border:0!important;box-shadow:0 12px 28px rgba(139,224,36,.22)!important}
+
         .field{min-width:0;width:100%}
         .field .input{width:100%;min-width:0;max-width:100%}
         .input[type="date"]{width:100%;min-width:0;max-width:100%;overflow:hidden;-webkit-appearance:none;appearance:none;text-align:left}
@@ -708,7 +724,15 @@ export default function Home() {
         {screen === 'home' && (
           <>
             <div className="top">
-              <div className="brand">Gasto<span>QR</span></div>
+              <div className="brand" aria-label="Kuento">
+                <span className="kuentoMark">
+                  <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M17 14h12v14l13-14h14L38 33l19 17H42L29 38v12H17V14Z" fill="#8BE024"/>
+                    <path d="M9 32c0-13 10-23 23-23 5 0 9 1 13 4l-8 7c-2-1-4-1-6-1-7 0-13 6-13 13s6 13 13 13c2 0 5-1 7-2l7 8c-4 3-9 4-14 4C19 55 9 45 9 32Z" fill="#D7FF73" opacity=".9"/>
+                  </svg>
+                </span>
+                <span className="kuentoWord">Kuen<span>to</span></span>
+              </div>
               <button className="iconbtn" onClick={() => navigate('settings')}>⚙️</button>
             </div>
 
@@ -727,7 +751,15 @@ export default function Home() {
               ✍️ Ingresar gasto manualmente
             </button>
 
-            {insights.map((x,i) => <div className="card" key={i} style={{ marginBottom: 10 }}>💡 {x}</div>)}
+            {insights.map((x,i) => {
+              const isAlert = String(x).startsWith('ALERTA:');
+              return (
+                <div className={`card ${isAlert ? 'insightWarning' : ''}`} key={i} style={{ marginBottom: 10 }}>
+                  {isAlert ? '⚠️ ' : '💡 '}
+                  {isAlert ? <strong>{x}</strong> : x}
+                </div>
+              );
+            })}
 
             <div className="label" style={{ margin: '20px 0 10px' }}>Últimos gastos</div>
             <div className="grid">{expenses.slice(0,8).map(e => <Expense key={e.id} e={e} del={del} />)}</div>
@@ -895,7 +927,7 @@ export default function Home() {
                 <input className="input" inputMode="numeric" value={settings.alertPct} onChange={e => setSettings({ ...settings, alertPct: Number(e.target.value || 0) })} />
               </div>
 
-              <button className="secondary" onClick={backupJSON}>Descargar backup</button>
+              <button className="secondary setBudgetBtn" onClick={saveBudgetSettings}>✅ Setear valor</button>
             </div>
           </>
         )}
