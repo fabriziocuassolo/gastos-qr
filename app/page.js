@@ -148,7 +148,7 @@ export default function Home() {
 
   function openPaymentApp(app) {
     const cfg = app === 'nx'
-      ? { name: 'NaranjaX', scheme: 'naranjax://', fallback: 'https://www.naranjax.com/' }
+      ? { name: 'NaranjaX', scheme: 'nx://', fallback: 'https://app.naranjax.com/' }
       : { name: 'Mercado Pago', scheme: 'mercadopago://', fallback: 'https://www.mercadopago.com.ar/' };
 
     notify('Abriendo ' + cfg.name + '…');
