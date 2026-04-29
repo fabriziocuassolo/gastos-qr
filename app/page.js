@@ -1,227 +1,275 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { BrowserQRCodeReader } from '@zxing/browser';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import Script from 'next/script';
 
-const CATS = [['🍔','Comida'],['🚗','Transp.'],['🛒','Compras'],['🏥','Salud'],['🎬','Ocio'],['💡','Servic.'],['🏠','Hogar'],['❓','Otro']];
+const CATS = [
+  ['🍔','Comida'], ['🚗','Transporte'], ['🛒','Compras'], ['🏥','Salud'],
+  ['🎬','Ocio'], ['💡','Servicios'], ['🏠','Hogar'], ['💪','Gym'], ['❓','Otro']
+];
+const CAT_RULES = {
+  Comida: ['kiosco','panader','bar','cafe','café','resto','restaurant','mcdonald','burger','helado','pizzeria','pizza','comida','super','mercado'],
+  Transporte: ['ypf','shell','axion','uber','cabify','taxi','colectivo','nafta','estacion','estación'],
+  Compras: ['farmacity','ropa','tienda','shopping','mercadolibre','compra','electro','ferreter'],
+  Salud: ['farmacia','odont','clinica','clínica','medico','médico','salud'],
+  Ocio: ['cine','bar','boliche','netflix','spotify','juego','steam'],
+  Servicios: ['luz','gas','agua','internet','claro','personal','movistar','servicio'],
+  Hogar: ['alquiler','mueble','casa','hogar','limpieza'],
+  Gym: ['gym','gimnasio','suplement','proteina','creatina']
+};
+
+function today() { return new Date().toISOString().slice(0,10); }
+function fmt(n) { return Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function monthKey(date = today()) { return String(date).slice(0,7); }
+function catLabel(name) { const hit = CATS.find(c => c[1] === name || `${c[0]} ${c[1]}` === name); return hit ? `${hit[0]} ${hit[1]}` : '❓ Otro'; }
+function downloadFile(name, content, type) { const blob = new Blob([content], { type }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); }
 
 export default function Home() {
-  const [screen,setScreen]=useState('home');
-  const [expenses,setExpenses]=useState([]);
-  const [form,setForm]=useState({amount:'',place:'',date:'',category:'❓ Otro',qrData:'',app:'none'});
-  const [toast,setToast]=useState('');
-  const [scanMsg,setScanMsg]=useState('');
-  const videoRef=useRef(null); const streamRef=useRef(null); const scannerRef=useRef(null); const controlsRef=useRef(null);
+  const [screen, setScreen] = useState('home');
+  const [expenses, setExpenses] = useState([]);
+  const [settings, setSettings] = useState({ budget: 0, alertPct: 80 });
+  const [form, setForm] = useState({ amount:'', place:'', date:today(), category:'❓ Otro', method:'Mercado Pago', qrData:'', lat:null, lng:null });
+  const [toast, setToast] = useState('');
+  const [query, setQuery] = useState('');
+  const [catFilter, setCatFilter] = useState('Todas');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [cameraOn, setCameraOn] = useState(false);
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  const loopRef = useRef(null);
+  const fileRef = useRef(null);
+  const restoreRef = useRef(null);
 
-  useEffect(()=>{ setExpenses(JSON.parse(localStorage.getItem('gq_expenses')||'[]')); },[]);
-  useEffect(()=>{ localStorage.setItem('gq_expenses',JSON.stringify(expenses)); },[expenses]);
-  useEffect(()=>()=>stopCamera(),[]);
+  useEffect(() => {
+    setExpenses(JSON.parse(localStorage.getItem('gq_expenses_v2') || localStorage.getItem('gq_expenses') || '[]'));
+    setSettings(JSON.parse(localStorage.getItem('gq_settings_v2') || '{"budget":0,"alertPct":80}'));
+  }, []);
+  useEffect(() => { localStorage.setItem('gq_expenses_v2', JSON.stringify(expenses)); }, [expenses]);
+  useEffect(() => { localStorage.setItem('gq_settings_v2', JSON.stringify(settings)); }, [settings]);
+  useEffect(() => { if (toast) { const t = setTimeout(()=>setToast(''), 2400); return () => clearTimeout(t); }}, [toast]);
+  useEffect(() => () => stopCamera(false), []);
 
-  function notify(msg){ setToast(msg); setTimeout(()=>setToast(''),2600); }
-  function fmt(n){ return Number(n||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); }
-  function today(){ return new Date().toISOString().split('T')[0]; }
+  const thisMonth = useMemo(() => expenses.filter(e => monthKey(e.date) === monthKey()), [expenses]);
+  const monthTotal = useMemo(() => thisMonth.reduce((s,e)=>s+Number(e.amount||0),0), [thisMonth]);
+  const budgetPct = settings.budget ? Math.min(100, Math.round(monthTotal / settings.budget * 100)) : 0;
+  const filtered = useMemo(() => expenses.filter(e => {
+    const q = query.toLowerCase().trim();
+    const okQ = !q || [e.place,e.category,e.method].join(' ').toLowerCase().includes(q);
+    const okC = catFilter === 'Todas' || e.category.includes(catFilter);
+    const okF = !from || e.date >= from;
+    const okT = !to || e.date <= to;
+    return okQ && okC && okF && okT;
+  }), [expenses, query, catFilter, from, to]);
 
-  function parseQR(qrText){
-    const raw = qrText || '';
+  function notify(msg) { setToast(msg); }
+  function navigate(s) { stopCamera(false); setScreen(s); }
+
+  function inferFromText(text='') {
+    const raw = String(text || '');
     let place = '';
+    try { const u = new URL(raw); place = u.hostname.replace('www.',''); } catch { place = raw.slice(0,44); }
+    const decoded = decodeURIComponent(raw).toLowerCase();
+    const amountPatterns = [/(?:monto|amount|total|importe|value)[=: ]+\$?\s*([0-9]+(?:[\.,][0-9]{1,2})?)/i, /\$\s*([0-9]+(?:[\.,][0-9]{1,2})?)/i];
     let amount = '';
+    for (const p of amountPatterns) { const m = raw.match(p); if (m) { amount = m[1].replace(',','.'); break; } }
     let category = '❓ Otro';
-
-    try { const u = new URL(raw); place = u.hostname.replace('www.',''); } catch {}
-
-    const lower = raw.toLowerCase();
-    if (lower.includes('mercadopago') || lower.includes('mpago')) place = place || 'Mercado Pago';
-    if (lower.includes('modo')) place = place || 'MODO';
-
-    // Busca patrones típicos: amount=1234.56, monto=1234, total: 1234, $1234
-    const patterns = [
-      /(?:amount|monto|total|importe|amt)[=:\s]+([0-9]+(?:[\.,][0-9]{1,2})?)/i,
-      /\$\s*([0-9]+(?:[\.,][0-9]{1,2})?)/i
-    ];
-    for (const p of patterns) {
-      const m = raw.match(p);
-      if (m) { amount = m[1].replace(',','.'); break; }
-    }
-
-    // Heurística de categoría por texto
-    if (/cafe|bar|resto|restaurant|comida|burger|pizza|helado|panader/i.test(raw)) category='🍔 Comida';
-    if (/taxi|uber|cabify|nafta|shell|ypf|estacion/i.test(raw)) category='🚗 Transp.';
-    if (/farmacia|salud|hospital|clinica/i.test(raw)) category='🏥 Salud';
-    if (/cine|teatro|juego|ocio/i.test(raw)) category='🎬 Ocio';
-    if (/luz|gas|agua|internet|servicio/i.test(raw)) category='💡 Servic.';
-
-    return { amount, place: place || raw.slice(0,45), category };
+    Object.entries(CAT_RULES).forEach(([cat, words]) => { if (words.some(w => decoded.includes(w))) category = catLabel(cat); });
+    return { place, amount, category };
   }
-
-  async function startScan(){
-    setScreen('scan');
-    setScanMsg('Buscando QR... acercá o alejás un poquito la cámara');
-
-    if (!navigator.mediaDevices?.getUserMedia) {
-      notify('📵 Tu navegador no permite usar cámara acá. Probá desde Safari.');
-      return;
-    }
-
-    try{
-      stopCamera();
-      if(!scannerRef.current) scannerRef.current = new BrowserQRCodeReader();
-      const video = videoRef.current;
-
-      controlsRef.current = await scannerRef.current.decodeFromVideoDevice(
-        undefined,
-        video,
-        function(result){
-          if(result){
-            const text = result.getText();
-            setScanMsg('QR leído ✅');
-            stopCamera();
-            openConfirm(text);
-          }
-        }
-      );
-    }catch(e){
-      console.error(e);
-      notify('📵 No pude iniciar el scanner. Probá subiendo una imagen del QR.');
-    }
+  function updatePlace(v) {
+    let category = form.category;
+    const low = v.toLowerCase();
+    Object.entries(CAT_RULES).forEach(([cat, words]) => { if (words.some(w => low.includes(w))) category = catLabel(cat); });
+    setForm(f => ({...f, place:v, category}));
   }
-
-  function stopCamera(){
-    if(controlsRef.current){
-      try { controlsRef.current.stop(); } catch(e) {}
-      controlsRef.current = null;
-    }
-    if(streamRef.current){
-      streamRef.current.getTracks().forEach(t=>t.stop());
-      streamRef.current=null;
-    }
-    if(videoRef.current){
-      try { videoRef.current.srcObject = null; } catch(e) {}
-    }
-  }
-
-  function openConfirm(qrText=''){
-    const p=parseQR(qrText);
-    setForm({amount:p.amount, place:p.place, date:today(), category:p.category, qrData:qrText, app:'none'});
+  function openConfirm(qrData='') {
+    const guess = inferFromText(qrData);
+    setForm({ amount: guess.amount || '', place: guess.place || '', date: today(), category: guess.category || '❓ Otro', method:'Mercado Pago', qrData, lat:null, lng:null });
+    if (navigator.geolocation) navigator.geolocation.getCurrentPosition(pos => setForm(f=>({...f, lat: pos.coords.latitude, lng: pos.coords.longitude })), ()=>{}, {enableHighAccuracy:false, timeout:4000});
     setScreen('confirm');
   }
 
-  async function handleQRImage(e){
-    const file=e.target.files?.[0];
-    if(!file) return;
-    e.target.value='';
-    const url=URL.createObjectURL(file);
-    try{
-      stopCamera();
-      if(!scannerRef.current) scannerRef.current = new BrowserQRCodeReader();
-      const result = await scannerRef.current.decodeFromImageUrl(url);
-      if(result?.getText()) openConfirm(result.getText());
-      else throw new Error('QR no detectado');
-    }catch(err){
-      console.error(err);
-      notify('No pude leer ese QR. Probá otra foto más nítida o cargalo manual.');
-      openConfirm('');
-    }finally{
-      URL.revokeObjectURL(url);
-    }
+  async function startCamera() {
+    setScreen('scan'); setCameraOn(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      streamRef.current = stream;
+      videoRef.current.srcObject = stream;
+      await videoRef.current.play();
+      scanTick();
+    } catch { notify('Sin permiso de cámara. Probá subir imagen del QR.'); }
+  }
+  function stopCamera(goHome=false) {
+    if (loopRef.current) cancelAnimationFrame(loopRef.current);
+    loopRef.current = null; setCameraOn(false);
+    if (streamRef.current) streamRef.current.getTracks().forEach(t=>t.stop());
+    streamRef.current = null;
+    if (goHome) setScreen('home');
+  }
+  function scanTick() {
+    const video = videoRef.current;
+    if (!video || !window.jsQR || video.readyState < 2) { loopRef.current = requestAnimationFrame(scanTick); return; }
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d'); ctx.drawImage(video, 0, 0);
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = window.jsQR(img.data, img.width, img.height);
+    if (code?.data) { stopCamera(false); openConfirm(code.data); }
+    else loopRef.current = requestAnimationFrame(scanTick);
+  }
+  function readQRImage(file) {
+    if (!file) return;
+    const img = new Image(); const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const canvas = document.createElement('canvas'); canvas.width = img.width; canvas.height = img.height;
+      const ctx = canvas.getContext('2d'); ctx.drawImage(img, 0, 0);
+      const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = window.jsQR?.(data.data, data.width, data.height);
+      URL.revokeObjectURL(url); stopCamera(false);
+      if (code?.data) openConfirm(code.data); else { openConfirm(''); notify('No pude leer el QR. Cargalo manual.'); }
+    };
+    img.src = url;
+  }
+  function buildExpense(methodOverride) {
+    const amount = Number(String(form.amount).replace(',','.'));
+    if (!amount || amount <= 0) { notify('Ingresá un monto válido'); return null; }
+    if (!form.place.trim()) { notify('Ingresá el comercio/lugar'); return null; }
+    return { ...form, id: Date.now(), amount, place: form.place.trim(), method: methodOverride || form.method };
   }
 
-  function saveAndPay(app){
-    const amount=parseFloat(String(form.amount).replace(',','.'));
-    if(!amount || amount<=0) return notify('💰 Ingresá un monto válido');
-    if(!form.place.trim()) return notify('📍 Ingresá el comercio');
-    const exp={id:Date.now(), amount, place:form.place.trim(), date:form.date||today(), category:form.category||'❓ Otro', app, qrData:form.qrData};
-    setExpenses([exp,...expenses]);
-    notify('✅ Gasto guardado');
-    if(app==='mp') setTimeout(()=>{ location.href='mercadopago://'; },500);
-    if(app==='modo') setTimeout(()=>{ location.href='modo://'; },500);
+  function saveExpense() {
+    const item = buildExpense();
+    if (!item) return;
+    setExpenses([item, ...expenses]);
+    notify('Gasto guardado');
     setScreen('home');
   }
 
+  function openPaymentApp(app) {
+    const cfg = app === 'nx'
+      ? { name: 'NaranjaX', scheme: 'naranjax://', fallback: 'https://www.naranjax.com/' }
+      : { name: 'Mercado Pago', scheme: 'mercadopago://', fallback: 'https://www.mercadopago.com.ar/' };
 
-  function exportCSV(){
-    if(!expenses.length) return notify('No hay gastos para exportar');
-    const headers=['Fecha','Lugar','Categoria','Monto','App'];
-    const rows=expenses.map(e=>[
-      e.date,
-      e.place,
-      e.category,
-      e.amount,
-      e.app==='mp'?'Mercado Pago':e.app==='modo'?'MODO':'Solo guardado'
-    ]);
-    const csv=[headers,...rows].map(row=>row.map(value=>{
-      const clean=String(value ?? '').replace(/"/g,'""');
-      return '"'+clean+'"';
-    }).join(',')).join('\n');
-    const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');
-    a.href=url;
-    a.download='gastos-qr-'+new Date().toISOString().split('T')[0]+'.csv';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    notify('CSV descargado');
+    notify('Abriendo ' + cfg.name + '…');
+
+    let opened = false;
+    const markOpened = () => { if (document.hidden) opened = true; };
+    document.addEventListener('visibilitychange', markOpened);
+
+    setTimeout(() => {
+      window.location.href = cfg.scheme;
+      setTimeout(() => {
+        document.removeEventListener('visibilitychange', markOpened);
+        if (!opened) window.location.href = cfg.fallback;
+      }, 1400);
+    }, 350);
   }
 
-  function del(id){ if(confirm('¿Eliminar este gasto?')) setExpenses(expenses.filter(e=>e.id!==id)); }
-  const monthExpenses=expenses.filter(e=>{ const d=new Date(e.date+'T12:00:00'), n=new Date(); return d.getMonth()===n.getMonth() && d.getFullYear()===n.getFullYear(); });
-  const monthTotal=monthExpenses.reduce((s,e)=>s+e.amount,0);
+  function saveAndOpenPayment(app) {
+    const method = app === 'nx' ? 'NaranjaX' : 'Mercado Pago';
+    const item = buildExpense(method);
+    if (!item) return;
+    setExpenses([item, ...expenses]);
+    openPaymentApp(app);
+    setTimeout(() => setScreen('home'), 500);
+  }
+  function del(id) { if (confirm('¿Eliminar este gasto?')) setExpenses(expenses.filter(e => e.id !== id)); }
+
+  function exportCSV() {
+    if (!expenses.length) return notify('No hay gastos');
+    const headers = ['Fecha','Lugar','Categoria','Monto','Metodo','Lat','Lng'];
+    const rows = expenses.map(e => [e.date,e.place,e.category,e.amount,e.method,e.lat||'',e.lng||'']);
+    const csv = [headers,...rows].map(r => r.map(v => '"'+String(v??'').replace(/"/g,'""')+'"').join(',')).join('\n');
+    downloadFile(`gastos-qr-${today()}.csv`, '\uFEFF'+csv, 'text/csv;charset=utf-8');
+  }
+  function backupJSON() { downloadFile(`backup-gastoqr-${today()}.json`, JSON.stringify({version:2, exportedAt:new Date().toISOString(), settings, expenses}, null, 2), 'application/json'); }
+  function restoreJSON(file) {
+    if (!file) return;
+    const r = new FileReader();
+    r.onload = () => { try { const data = JSON.parse(r.result); if (!Array.isArray(data.expenses)) throw Error(); setExpenses(data.expenses); if(data.settings) setSettings(data.settings); notify('Backup restaurado'); } catch { notify('Backup inválido'); } };
+    r.readAsText(file);
+  }
+
+  const catTotals = useMemo(() => {
+    const m = {}; expenses.forEach(e => m[e.category] = (m[e.category]||0)+Number(e.amount||0));
+    return Object.entries(m).sort((a,b)=>b[1]-a[1]);
+  }, [expenses]);
+  const insights = useMemo(() => {
+    const arr = [];
+    if (settings.budget && monthTotal >= settings.budget * (settings.alertPct/100)) arr.push(`Ojo: ya usaste ${budgetPct}% de tu presupuesto mensual.`);
+    if (catTotals[0]) arr.push(`Tu categoría más fuerte es ${catTotals[0][0]} con $${fmt(catTotals[0][1])}.`);
+    const todayTotal = expenses.filter(e=>e.date===today()).reduce((s,e)=>s+Number(e.amount||0),0);
+    if (todayTotal) arr.push(`Hoy llevás gastado $${fmt(todayTotal)}.`);
+    return arr.length ? arr : ['Todavía no hay suficientes datos para insights.'];
+  }, [expenses, settings, monthTotal, budgetPct, catTotals]);
 
   return <>
-    <style>{CSS}</style>
-    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+    <Script src="https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.min.js" strategy="afterInteractive" />
+    <style>{`
+      :root{--bg:#070707;--surface:#121212;--surface2:#1b1b1b;--ink:#f6f3ed;--muted:#a6a09a;--border:#2b2b2b;--orange:#ff6b2b;--green:#00d084;--red:#ff4d4d;--shadow:0 18px 60px rgba(0,0,0,.35)}
+      *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif} button,input,select{font:inherit} .app{min-height:100dvh;padding:calc(env(safe-area-inset-top) + 18px) 18px 96px;background:radial-gradient(circle at 80% 0%,rgba(255,107,43,.18),transparent 30%),radial-gradient(circle at 0% 20%,rgba(0,208,132,.12),transparent 28%),var(--bg)}
+      .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}.brand{font-size:26px;font-weight:900;letter-spacing:-.06em}.brand span{color:var(--orange)}.iconbtn,.pillbtn{border:1px solid var(--border);background:var(--surface);color:var(--ink);border-radius:16px;padding:12px 14px;box-shadow:var(--shadow)}.hero{background:linear-gradient(135deg,#151515,#0f0f0f);border:1px solid var(--border);border-radius:28px;padding:24px;box-shadow:var(--shadow)}.label{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:800}.total{font-size:44px;font-weight:950;letter-spacing:-.08em;margin:5px 0}.muted{color:var(--muted);font-size:13px}.progress{height:9px;background:#252525;border-radius:99px;overflow:hidden;margin-top:16px}.progress div{height:100%;background:linear-gradient(90deg,var(--green),var(--orange));border-radius:99px}.scan{width:100%;margin:18px 0;border:0;border-radius:24px;background:var(--orange);color:white;padding:19px 20px;font-weight:900;font-size:18px;display:flex;justify-content:space-between;align-items:center;box-shadow:0 18px 40px rgba(255,107,43,.28)}.grid{display:grid;gap:12px}.card{background:rgba(18,18,18,.92);border:1px solid var(--border);border-radius:22px;padding:16px;box-shadow:var(--shadow)}.row{display:flex;align-items:center;justify-content:space-between;gap:10px}.expense{display:flex;gap:12px;align-items:center}.emoji{width:46px;height:46px;background:var(--surface2);border-radius:16px;display:grid;place-items:center;font-size:23px}.title{font-weight:850}.amount{font-weight:950}.small{font-size:12px;color:var(--muted)}.nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:rgba(7,7,7,.86);border-top:1px solid var(--border);backdrop-filter:blur(18px);padding:8px 0 calc(env(safe-area-inset-bottom) + 8px);z-index:10}.nav button{flex:1;background:transparent;color:var(--muted);border:0;padding:8px 4px;font-size:11px}.nav b{display:block;color:var(--ink);font-size:22px}.form{display:grid;gap:14px}.field label{display:block;margin-bottom:7px}.input{width:100%;background:var(--surface2);color:var(--ink);border:1px solid var(--border);border-radius:16px;padding:14px;outline:none}.chips{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.chip{border:1px solid var(--border);background:var(--surface2);color:var(--muted);border-radius:16px;padding:11px 6px}.chip.on{border-color:var(--orange);color:var(--orange);background:rgba(255,107,43,.1)}.primary{background:var(--green);color:#001b10;border:0;border-radius:18px;padding:16px;font-weight:950}.secondary{background:var(--surface2);color:var(--ink);border:1px solid var(--border);border-radius:18px;padding:15px;font-weight:800}.paygrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.paybtn{border:0;border-radius:18px;padding:15px 10px;color:white;display:grid;gap:4px;text-align:center;box-shadow:var(--shadow)}.paybtn b{font-size:13px}.paybtn span{font-size:11px;opacity:.82}.paybtn.mp{background:linear-gradient(135deg,#009ee3,#0069ff)}.paybtn.nx{background:linear-gradient(135deg,#ff6b2b,#00d084);color:#08100c}.danger{color:var(--red)}.videoBox{aspect-ratio:1;border-radius:28px;overflow:hidden;background:#000;position:relative;border:1px solid var(--border)}video{width:100%;height:100%;object-fit:cover}.frame{position:absolute;inset:20%;border:3px solid var(--orange);border-radius:24px;box-shadow:0 0 0 999px rgba(0,0,0,.35)}.filters{display:grid;grid-template-columns:1fr 1fr;gap:8px}.toast{position:fixed;left:50%;bottom:92px;transform:translateX(-50%);background:var(--ink);color:#111;padding:12px 18px;border-radius:99px;font-weight:800;z-index:30;white-space:nowrap}.barrow{display:grid;grid-template-columns:90px 1fr 75px;gap:10px;align-items:center;margin:10px 0}.bar{height:8px;border-radius:99px;background:#242424;overflow:hidden}.bar div{height:100%;background:var(--orange)}
+    `}</style>
+    <div className="app">
+      {screen==='home' && <>
+        <div className="top"><div className="brand">Gasto<span>QR</span></div><button className="iconbtn" onClick={()=>navigate('settings')}>⚙️</button></div>
+        <div className="hero"><div className="label">Gastos este mes</div><div className="total">${fmt(monthTotal)}</div><div className="muted">{thisMonth.length} registros · presupuesto {settings.budget ? `$${fmt(settings.budget)}` : 'sin definir'}</div>{settings.budget>0&&<div className="progress"><div style={{width:`${budgetPct}%`}} /></div>}</div>
+        <button className="scan" onClick={startCamera}><span>📷 Escanear QR</span><span>→</span></button>
+        {insights.map((x,i)=><div className="card" key={i} style={{marginBottom:10}}>💡 {x}</div>)}
+        <div className="label" style={{margin:'20px 0 10px'}}>Últimos gastos</div>
+        <div className="grid">{expenses.slice(0,8).map(e=><Expense key={e.id} e={e} del={del}/>)}</div>
+        {!expenses.length&&<div className="card muted">Todavía no hay gastos. Escaneá o cargá uno manual.</div>}
+      </>}
 
-    {screen==='home' && <main className="screen active">
-      <div className="topbar"><div className="topbar-title">Gasto<span>QR</span></div><button className="icon-btn" onClick={()=>setScreen('stats')}>📊</button></div>
-      <section className="home-hero"><div className="label">Gastos este mes</div><div className="month-total">${fmt(monthTotal)}</div><div className="sub">{monthExpenses.length} registros</div></section>
-      <button className="scan-fab" onClick={startScan}><span>📷 Escanear QR</span><b>→</b></button>
-      <div className="section-label">Últimos gastos</div>
-      <ExpenseList expenses={expenses.slice(0,8)} del={del} fmt={fmt}/>
-      {!expenses.length && <div className="empty-home">Tocá el botón naranja para<br/>escanear tu primer QR 🧾</div>}
-    </main>}
+      {screen==='scan' && <>
+        <div className="top"><button className="iconbtn" onClick={()=>stopCamera(true)}>←</button><div className="title">Escanear QR</div><span/></div>
+        <div className="videoBox"><video ref={videoRef} autoPlay playsInline muted/><div className="frame"/></div>
+        <p className="muted" style={{textAlign:'center'}}>Apuntá al QR. Si no lee, subí una imagen.</p>
+        <button className="secondary" style={{width:'100%'}} onClick={()=>fileRef.current.click()}>🖼️ Subir imagen del QR</button>
+        <input ref={fileRef} type="file" accept="image/*" hidden onChange={e=>readQRImage(e.target.files?.[0])}/>
+      </>}
 
-    {screen==='scan' && <main className="screen active scan-screen">
-      <div className="scan-topbar"><button className="back-btn" onClick={()=>{stopCamera();setScreen('home')}}>←</button><h2>Escanear QR</h2><div/></div>
-      <div className="qr-viewport"><video ref={videoRef} autoPlay playsInline muted/><div className="qr-overlay"><div className="qr-frame"/></div></div>
-      <div className="scan-hint">Apuntá la cámara al QR del comercio</div>
-      {scanMsg && <div className="analyzing">{scanMsg}</div>}
-      <div className="scan-divider">o subí imagen del QR</div>
-      <button className="scan-alt-btn" onClick={()=>document.getElementById('cameraInput').click()}>🖼️ Seleccionar imagen</button>
-      <input type="file" id="cameraInput" accept="image/*" onChange={handleQRImage}/>
-    </main>}
+      {screen==='confirm' && <>
+        <div className="top"><button className="iconbtn" onClick={()=>navigate('home')}>←</button><div className="title">Nuevo gasto</div><span/></div>
+        <div className="card form">
+          <div className="field"><label className="label">Monto</label><input className="input" inputMode="decimal" value={form.amount} onChange={e=>setForm({...form,amount:e.target.value})} placeholder="0.00"/></div>
+          <div className="field"><label className="label">Lugar / comercio</label><input className="input" value={form.place} onChange={e=>updatePlace(e.target.value)} placeholder="Kiosco, café, súper..."/></div>
+          <div className="filters"><div className="field"><label className="label">Fecha</label><input className="input" type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></div><div className="field"><label className="label">Método</label><select className="input" value={form.method} onChange={e=>setForm({...form,method:e.target.value})}><option>Mercado Pago</option><option>NaranjaX</option><option>Débito</option><option>Crédito</option><option>Efectivo</option><option>Otro</option></select></div></div>
+          <div><div className="label" style={{marginBottom:8}}>Categoría</div><div className="chips">{CATS.map(([em,n])=><button key={n} className={`chip ${form.category.includes(n)?'on':''}`} onClick={()=>setForm({...form,category:`${em} ${n}`})}>{em}<br/>{n}</button>)}</div></div>
+          {form.lat&&<div className="small">📍 Ubicación guardada aproximada</div>}
+          <div className="paygrid">
+            <button className="paybtn mp" onClick={()=>saveAndOpenPayment('mp')}><b>💙 Mercado Pago</b><span>Guardar y abrir</span></button>
+            <button className="paybtn nx" onClick={()=>saveAndOpenPayment('nx')}><b>🧡 NaranjaX</b><span>Guardar y abrir</span></button>
+          </div>
+          <button className="primary" onClick={saveExpense}>Solo guardar gasto</button>
+        </div>
+      </>}
 
-    {screen==='confirm' && <main className="screen active">
-      <div className="confirm-header"><button className="icon-btn" onClick={()=>setScreen('home')}>←</button><h2>Confirmar gasto</h2></div>
-      {!form.amount && <div className="no-amount-badge">✏️ No se detectó monto — completalo manualmente</div>}
-      {form.amount && <div className="detected-badge">✅ Datos precargados desde el QR</div>}
-      <section className="form-card">
-        <label>💰 Monto<input className="finput amount-big" type="number" inputMode="decimal" value={form.amount} onChange={e=>setForm({...form,amount:e.target.value})} placeholder="0.00"/></label>
-        <label>📍 Lugar / Comercio<input className="finput" value={form.place} onChange={e=>setForm({...form,place:e.target.value})} placeholder="Nombre del comercio"/></label>
-        <label>📅 Fecha<input className="finput" type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></label>
-        <div><label>🏷️ Categoría</label><div className="cats">{CATS.map(([e,n])=><button key={n} className={'cat-chip '+(form.category===`${e} ${n}`?'on':'')} onClick={()=>setForm({...form,category:`${e} ${n}`})}><span>{e}</span>{n}</button>)}</div></div>
-      </section>
-      <div className="pay-section"><div className="pay-label">Guardar y pagar con</div><div className="pay-btns"><button className="pay-btn btn-mp" onClick={()=>saveAndPay('mp')}>💳 Mercado Pago</button><button className="pay-btn btn-modo" onClick={()=>saveAndPay('modo')}>📱 MODO</button></div></div>
-      <button className="btn-only-save" onClick={()=>saveAndPay('none')}>Solo guardar</button>
-    </main>}
+      {screen==='history' && <>
+        <div className="top"><div className="brand">Historial</div><button className="iconbtn" onClick={()=>setScreen('confirm')}>＋</button></div>
+        <div className="card" style={{marginBottom:12}}><div className="form"><input className="input" placeholder="Buscar comercio/categoría" value={query} onChange={e=>setQuery(e.target.value)}/><div className="filters"><input className="input" type="date" value={from} onChange={e=>setFrom(e.target.value)}/><input className="input" type="date" value={to} onChange={e=>setTo(e.target.value)}/></div><select className="input" value={catFilter} onChange={e=>setCatFilter(e.target.value)}><option>Todas</option>{CATS.map(c=><option key={c[1]}>{c[1]}</option>)}</select></div></div>
+        <div className="grid">{filtered.map(e=><Expense key={e.id} e={e} del={del}/>)}</div>
+      </>}
 
-    {screen==='history' && <main className="screen active"><div className="topbar"><div className="topbar-title">Historial</div></div><ExpenseList expenses={expenses} del={del} fmt={fmt}/></main>}
-    {screen==='stats' && <Stats expenses={expenses} fmt={fmt} setScreen={setScreen} exportCSV={exportCSV}/>} 
+      {screen==='stats' && <>
+        <div className="top"><div className="brand">Stats</div><button className="iconbtn" onClick={exportCSV}>CSV</button></div>
+        <div className="card" style={{marginBottom:12}}><div className="label">Total histórico</div><div className="total">${fmt(expenses.reduce((s,e)=>s+Number(e.amount||0),0))}</div><div className="muted">{expenses.length} gastos registrados</div></div>
+        <div className="card" style={{marginBottom:12}}><div className="label">Por categoría</div>{catTotals.map(([c,v])=><div className="barrow" key={c}><span className="small">{c}</span><div className="bar"><div style={{width:`${catTotals[0]?.[1]?v/catTotals[0][1]*100:0}%`}}/></div><b>${fmt(v)}</b></div>)}</div>
+        <div className="card form"><button className="secondary" onClick={exportCSV}>📥 Descargar CSV</button><button className="secondary" onClick={backupJSON}>💾 Descargar backup JSON</button><button className="secondary" onClick={()=>restoreRef.current.click()}>♻️ Restaurar backup</button><input hidden ref={restoreRef} type="file" accept="application/json" onChange={e=>restoreJSON(e.target.files?.[0])}/></div>
+      </>}
 
-    {!['scan','confirm'].includes(screen) && <nav className="bottom-nav"><button onClick={()=>setScreen('home')}>🏠<span>Inicio</span></button><button onClick={startScan}>📷<span>Escanear</span></button><button onClick={()=>setScreen('history')}>📋<span>Historial</span></button><button onClick={()=>setScreen('stats')}>📊<span>Stats</span></button></nav>}
-    <div className={'toast '+(toast?'show':'')}>{toast}</div>
+      {screen==='settings' && <>
+        <div className="top"><button className="iconbtn" onClick={()=>navigate('home')}>←</button><div className="title">Configuración</div><span/></div>
+        <div className="card form"><div className="field"><label className="label">Presupuesto mensual</label><input className="input" inputMode="numeric" value={settings.budget} onChange={e=>setSettings({...settings,budget:Number(e.target.value||0)})}/></div><div className="field"><label className="label">Alerta al porcentaje</label><input className="input" inputMode="numeric" value={settings.alertPct} onChange={e=>setSettings({...settings,alertPct:Number(e.target.value||0)})}/></div><button className="secondary" onClick={backupJSON}>Descargar backup</button></div>
+      </>}
+    </div>
+    {toast&&<div className="toast">{toast}</div>}
+    {screen!=='scan'&&screen!=='confirm'&&<nav className="nav"><button onClick={()=>navigate('home')}><b>🏠</b>Inicio</button><button onClick={startCamera}><b>📷</b>QR</button><button onClick={()=>navigate('history')}><b>📋</b>Historial</button><button onClick={()=>navigate('stats')}><b>📊</b>Stats</button></nav>}
   </>;
 }
 
-function ExpenseList({expenses,del,fmt}){
-  return <div className="expense-list">{expenses.map(e=>{ const emoji=e.category.split(' ')[0]; return <article className="expense-card" key={e.id} onClick={()=>del(e.id)}><div className="exp-icon">{emoji}</div><div className="exp-info"><div className="exp-place">{e.place}</div><div className="exp-meta">{new Date(e.date+'T12:00:00').toLocaleDateString('es-AR',{day:'numeric',month:'short'})} · {e.category.replace(emoji,'').trim()}</div></div><div className="exp-right"><div className="exp-amount">${fmt(e.amount)}</div><div className="exp-app">{e.app==='mp'?'MP':e.app==='modo'?'MODO':'guardado'}</div></div></article>})}</div>
+function Expense({ e, del }) {
+  const emoji = String(e.category || '❓').split(' ')[0];
+  return <div className="card row" onClick={()=>del(e.id)}><div className="expense"><div className="emoji">{emoji}</div><div><div className="title">{e.place}</div><div className="small">{e.date} · {e.category} · {e.method || 'Sin método'}</div></div></div><div className="amount">${fmt(e.amount)}</div></div>;
 }
-function Stats({expenses,fmt,setScreen,exportCSV}){
-  const total=expenses.reduce((s,e)=>s+e.amount,0);
-  const byCat={}; expenses.forEach(e=>byCat[e.category]=(byCat[e.category]||0)+e.amount);
-  return <main className="screen active"><div className="topbar"><div className="topbar-title">Estadísticas</div><button className="icon-btn" onClick={()=>setScreen('home')}>✕</button></div><button className="btn-only-save export-btn" onClick={exportCSV}>📥 Descargar CSV</button><section className="stats-card"><h3>Total cargado</h3><div className="big-num">${fmt(total)}</div><p>{expenses.length} gastos</p></section><section className="stats-card"><h3>Por categoría</h3>{Object.entries(byCat).sort((a,b)=>b[1]-a[1]).map(([k,v])=><p key={k}>{k}: <b>${fmt(v)}</b></p>)}</section></main>
-}
-
-const CSS = `
-:root{--bg:#f5f2ed;--ink:#1a1612;--ink2:#6b6560;--surface:#fff;--border:#e2ddd8;--mp:#009ee3;--modo:#7b3fff;--green:#00b87a;--accent:#ff6b2b;--r:20px;--shadow:0 2px 16px rgba(26,22,18,.08)}*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}body{font-family:Inter,sans-serif;background:var(--bg);color:var(--ink);min-height:100dvh}.screen{min-height:100dvh;padding-bottom:96px}.topbar{display:flex;align-items:center;justify-content:space-between;padding:52px 20px 16px}.topbar-title{font-family:Syne,sans-serif;font-size:22px;font-weight:800}.topbar-title span{color:var(--accent)}button{font-family:inherit}.icon-btn{width:40px;height:40px;background:var(--surface);border:1px solid var(--border);border-radius:12px;font-size:18px;box-shadow:var(--shadow)}.home-hero{margin:8px 20px 0;background:var(--ink);border-radius:24px;padding:28px 24px 24px;color:#fff}.label,.section-label,.pay-label{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--ink2)}.home-hero .label{color:#fff;opacity:.5}.month-total{font-family:Syne,sans-serif;font-size:40px;font-weight:800}.sub{font-size:12px;opacity:.45}.scan-fab{margin:20px;width:calc(100% - 40px);background:var(--accent);border:0;border-radius:20px;padding:20px 24px;color:#fff;font-family:Syne,sans-serif;font-size:17px;font-weight:700;display:flex;justify-content:space-between;box-shadow:0 6px 24px rgba(255,107,43,.35)}.section-label{padding:20px 20px 10px}.expense-list{padding:0 20px;display:flex;flex-direction:column;gap:10px}.expense-card{background:#fff;border-radius:16px;padding:14px 16px;display:flex;align-items:center;gap:14px;box-shadow:var(--shadow)}.exp-icon{width:44px;height:44px;border-radius:14px;background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:22px}.exp-info{flex:1;min-width:0}.exp-place{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.exp-meta,.exp-app{font-size:11px;color:var(--ink2);margin-top:2px}.exp-right{text-align:right}.exp-amount{font-family:Syne,sans-serif;font-size:16px;font-weight:700}.empty-home{text-align:center;padding:32px 20px;color:var(--ink2);font-size:13px;line-height:1.6}.scan-screen{background:var(--ink);color:#fff}.scan-topbar{display:flex;align-items:center;justify-content:space-between;padding:52px 20px 20px}.back-btn{background:rgba(255,255,255,.1);border:0;border-radius:12px;width:38px;height:38px;font-size:20px;color:#fff}.qr-viewport{margin:0 20px;border-radius:24px;overflow:hidden;position:relative;aspect-ratio:1;background:#000}.qr-viewport video{width:100%;height:100%;object-fit:cover}.qr-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}.qr-frame{width:60%;aspect-ratio:1;border:2.5px solid var(--accent);border-radius:16px;box-shadow:0 0 0 2000px rgba(0,0,0,.4)}.scan-hint{text-align:center;font-size:13px;color:rgba(255,255,255,.5);padding:16px}.scan-divider{display:flex;align-items:center;gap:12px;margin:18px 20px;font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:rgba(255,255,255,.3)}.scan-divider:before,.scan-divider:after{content:'';flex:1;height:1px;background:rgba(255,255,255,.12)}.scan-alt-btn{margin:0 20px;width:calc(100% - 40px);padding:15px;background:rgba(255,255,255,.08);border:1.5px solid rgba(255,255,255,.12);border-radius:16px;color:#fff;font-size:14px}#cameraInput{display:none}.confirm-header{padding:52px 20px 12px;display:flex;align-items:center;gap:14px}.confirm-header h2{font-family:Syne,sans-serif;font-size:22px}.detected-badge,.no-amount-badge{margin:0 20px 16px;border-radius:14px;padding:12px 16px;font-size:13px;font-weight:500}.detected-badge{background:#e8faf3;border:1.5px solid #b3e8d6;color:#00705a}.no-amount-badge{background:#fff8f0;border:1.5px solid #ffd8b8;color:#b85000}.form-card{margin:0 20px;background:#fff;border-radius:var(--r);padding:20px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:16px}.form-card label{display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:var(--ink2);margin-bottom:7px}.finput{width:100%;background:var(--bg);border:1.5px solid var(--border);border-radius:14px;padding:13px 15px;color:var(--ink);font-size:16px;outline:none;margin-top:7px}.amount-big{font-family:Syne,sans-serif;font-size:32px;font-weight:800}.cats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.cat-chip{padding:10px 4px;background:var(--bg);border:1.5px solid var(--border);border-radius:14px;font-size:11px;color:var(--ink2);display:flex;flex-direction:column;align-items:center;gap:4px}.cat-chip span{font-size:20px}.cat-chip.on{border-color:var(--accent);background:#fff4ef;color:var(--accent);font-weight:600}.pay-section{margin:20px 20px 0}.pay-label{margin-bottom:10px}.pay-btns{display:flex;gap:10px}.pay-btn{flex:1;padding:16px 12px;border:0;border-radius:18px;color:#fff;font-family:Syne,sans-serif;font-weight:700}.btn-mp{background:var(--mp)}.btn-modo{background:var(--modo)}.btn-only-save{width:calc(100% - 40px);margin:10px 20px 0;padding:16px;background:#fff;border:1.5px solid var(--border);border-radius:18px;font-size:14px;color:var(--ink2)}.export-btn{margin:0 20px 14px;color:var(--ink);font-weight:700}.stats-card{margin:0 20px 14px;background:#fff;border-radius:var(--r);padding:20px;box-shadow:var(--shadow)}.stats-card h3{font-family:Syne,sans-serif;font-size:13px;text-transform:uppercase;color:var(--ink2);margin-bottom:14px}.big-num{font-family:Syne,sans-serif;font-size:36px;font-weight:800}.bottom-nav{position:fixed;bottom:0;left:0;right:0;background:rgba(245,242,237,.92);backdrop-filter:blur(20px);border-top:1px solid var(--border);padding:8px 0 26px;display:flex}.bottom-nav button{flex:1;background:none;border:0;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:22px}.bottom-nav span{font-size:10px;color:var(--ink2)}.toast{position:fixed;bottom:96px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--ink);color:#fff;padding:11px 22px;border-radius:999px;font-size:13px;opacity:0;pointer-events:none;transition:all .3s;z-index:999;white-space:nowrap}.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
-`;
