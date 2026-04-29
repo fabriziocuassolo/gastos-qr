@@ -634,7 +634,7 @@ export default function Home() {
   return (
     <>
       <style>{`
-        :root{--bg:#070707;--surface:#121212;--surface2:#1b1b1b;--ink:#f6f3ed;--muted:#a6a09a;--border:#2b2b2b;--orange:#ff6b2b;--green:#00d084;--red:#ff4d4d;--shadow:0 18px 60px rgba(0,0,0,.35)}
+        :root{--bg:#070707;--surface:#121212;--surface2:#1b1b1b;--ink:#f6f3ed;--muted:#a6a09a;--border:#2b2b2b;--orange:#A8FF00;--green:#00d084;--red:#ff4d4d;--shadow:0 18px 60px rgba(0,0,0,.35)}
         *{box-sizing:border-box}
         body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif}
         button,input,select{font:inherit}
@@ -674,7 +674,7 @@ export default function Home() {
         .paybtn b{font-size:13px}
         .paybtn span{font-size:11px;opacity:.82}
         .paybtn.mp{background:linear-gradient(135deg,#009ee3,#0069ff)}
-        .paybtn.nx{background:linear-gradient(135deg,#ff6b2b,#00d084);color:#08100c}
+        .paybtn.nx{background:linear-gradient(135deg,#A8FF00,#00d084);color:#08100c}
         .danger{color:var(--red)}
         .videoBox{aspect-ratio:1;border-radius:28px;overflow:hidden;background:#000;position:relative;border:1px solid var(--border)}
         #qr-reader{width:100%;height:100%;background:#000}
@@ -688,6 +688,14 @@ export default function Home() {
         .barrow{display:grid;grid-template-columns:90px 1fr 75px;gap:10px;align-items:center;margin:10px 0}
         .bar{height:8px;border-radius:99px;background:#242424;overflow:hidden}
         .bar div{height:100%;background:var(--orange)}
+.warning {
+  background: rgba(255,0,0,0.08);
+  border: 1px solid rgba(255,0,0,0.4);
+  color: #ff4d4d;
+  font-weight: 600;
+  box-shadow: 0 0 12px rgba(255,0,0,0.2);
+}
+
         .field{min-width:0;width:100%}
         .field .input{width:100%;min-width:0;max-width:100%}
         .input[type="date"]{width:100%;min-width:0;max-width:100%;overflow:hidden;-webkit-appearance:none;appearance:none;text-align:left}
