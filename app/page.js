@@ -366,6 +366,30 @@ export default function Home() {
     setForm(f => ({ ...f, place: v, category }));
   }
 
+  function openManualExpense() {
+    stopCamera(false);
+    setForm({
+      amount: '',
+      place: '',
+      date: today(),
+      category: '❓ Otro',
+      method: 'Manual',
+      qrData: '',
+      lat: null,
+      lng: null
+    });
+
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        pos => setForm(f => ({ ...f, lat: pos.coords.latitude, lng: pos.coords.longitude })),
+        () => {},
+        { enableHighAccuracy: false, timeout: 4000 }
+      );
+    }
+
+    setScreen('confirm');
+  }
+
   async function runOCRForVisibleAmount(imageDataUrl) {
     if (!imageDataUrl) return '';
     try {
@@ -686,6 +710,10 @@ export default function Home() {
 
             <button className="scan" onClick={startCamera}>
               <span>📷 Escanear QR</span><span>→</span>
+            </button>
+
+            <button className="secondary" style={{ width: '100%', marginTop: -6, marginBottom: 16 }} onClick={openManualExpense}>
+              ✍️ Ingresar gasto manualmente
             </button>
 
             {insights.map((x,i) => <div className="card" key={i} style={{ marginBottom: 10 }}>💡 {x}</div>)}
