@@ -38,7 +38,6 @@ export default function Home() {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const loopRef = useRef(null);
-  const qrScannerRef = useRef(null);
   const fileRef = useRef(null);
   const restoreRef = useRef(null);
 
@@ -66,17 +65,151 @@ export default function Home() {
   function notify(msg) { setToast(msg); }
   function navigate(s) { stopCamera(false); setScreen(s); }
 
+  function parseTLV(value='') {
+    const result = {};
+    let i = 0;
+
+    while (i + 4 <= value.length) {
+      const id = value.slice(i, i + 2);
+      const lenText = value.slice(i + 2, i + 4);
+
+      if (!/^\d{2}$/.test(id) || !/^\d{2}$/.test(lenText)) break;
+
+      const len = Number(lenText);
+      const start = i + 4;
+      const end = start + len;
+
+      if (len < 0 || end > value.length) break;
+
+      const val = value.slice(start, end);
+      result[id] = val;
+
+      // Merchant Account Information / Additional Data templates can contain nested TLV.
+      if ((Number(id) >= 26 && Number(id) <= 51) || id === '62' || id === '64' || id === '80') {
+        const nested = parseTLV(val);
+        if (Object.keys(nested).length) result[id + '_parsed'] = nested;
+      }
+
+      i = end;
+    }
+
+    return result;
+  }
+
+  function findNestedValue(parsed, keys=[]) {
+    for (const key of keys) {
+      if (parsed[key]) return parsed[key];
+    }
+
+    for (const [k, v] of Object.entries(parsed)) {
+      if (k.endsWith('_parsed') && v && typeof v === 'object') {
+        for (const key of keys) {
+          if (v[key]) return v[key];
+        }
+      }
+    }
+
+    return '';
+  }
+
+  function parsePaymentQR(text='') {
+    const raw = String(text || '').trim();
+    const decodedRaw = safeDecode(raw);
+
+    // 1) QR de prueba / URLs con query params.
+    try {
+      const paramSource = decodedRaw.includes('?') ? decodedRaw.split('?').slice(1).join('?') : decodedRaw;
+      const params = new URLSearchParams(paramSource);
+
+      const pMonto = params.get('monto') || params.get('amount') || params.get('importe') || params.get('total') || params.get('transaction_amount');
+      const pComercio = params.get('comercio') || params.get('merchant') || params.get('merchant_name') || params.get('lugar') || params.get('place');
+      const pCategoria = params.get('categoria') || params.get('category');
+
+      if (pMonto || pComercio || pCategoria) {
+        return {
+          amount: pMonto ? String(pMonto).replace(',', '.') : '',
+          place: pComercio || '',
+          category: pCategoria ? catLabel(pCategoria) : '',
+          rawType: 'query'
+        };
+      }
+    } catch {}
+
+    // 2) QR EMVCo / Transferencias 3.0: ID + longitud + valor.
+    // Campos estándar útiles:
+    // 54 = monto, 59 = nombre comercio, 60 = ciudad, 52 = MCC, 53 = moneda, 58 = país, 62 = datos adicionales.
+    const cleaned = decodedRaw.replace(/\s/g, '');
+    const looksLikeEMV = /^000201/.test(cleaned) || /^0002/.test(cleaned) || /(^|\D)540[0-9]/.test(cleaned);
+
+    if (looksLikeEMV) {
+      const parsed = parseTLV(cleaned);
+
+      const amount = parsed['54'] || '';
+      const merchantName = parsed['59'] || '';
+      const merchantCity = parsed['60'] || '';
+
+      // En algunos QR el nombre puede venir dentro de templates 26-51 o datos adicionales 62.
+      const nestedMerchant = findNestedValue(parsed, ['59', '01', '02', '03']);
+      const additionalLabel = parsed['62_parsed'] ? findNestedValue(parsed['62_parsed'], ['05', '07', '08']) : '';
+
+      return {
+        amount: amount ? String(amount).replace(',', '.') : '',
+        place: merchantName || nestedMerchant || additionalLabel || merchantCity || 'Comercio QR',
+        category: '',
+        rawType: 'emv',
+        emv: parsed
+      };
+    }
+
+    // 3) Texto suelto común.
+    const amountPatterns = [
+      /(?:monto|amount|total|importe|value|valor)[=: ]+\$?\s*([0-9]+(?:[\.,][0-9]{1,2})?)/i,
+      /\$\s*([0-9]+(?:[\.,][0-9]{1,2})?)/i
+    ];
+
+    let amount = '';
+    for (const p of amountPatterns) {
+      const m = decodedRaw.match(p);
+      if (m) {
+        amount = m[1].replace(',', '.');
+        break;
+      }
+    }
+
+    let place = '';
+    try {
+      const u = new URL(decodedRaw);
+      place = u.hostname.replace('www.', '');
+    } catch {
+      place = decodedRaw.slice(0, 44);
+    }
+
+    return { amount, place, category: '', rawType: 'text' };
+  }
+
+  function safeDecode(value='') {
+    try { return decodeURIComponent(value); } catch { return value; }
+  }
+
   function inferFromText(text='') {
     const raw = String(text || '');
-    let place = '';
-    try { const u = new URL(raw); place = u.hostname.replace('www.',''); } catch { place = raw.slice(0,44); }
-    const decoded = decodeURIComponent(raw).toLowerCase();
-    const amountPatterns = [/(?:monto|amount|total|importe|value)[=: ]+\$?\s*([0-9]+(?:[\.,][0-9]{1,2})?)/i, /\$\s*([0-9]+(?:[\.,][0-9]{1,2})?)/i];
-    let amount = '';
-    for (const p of amountPatterns) { const m = raw.match(p); if (m) { amount = m[1].replace(',','.'); break; } }
-    let category = '❓ Otro';
-    Object.entries(CAT_RULES).forEach(([cat, words]) => { if (words.some(w => decoded.includes(w))) category = catLabel(cat); });
-    return { place, amount, category };
+    const decoded = safeDecode(raw).toLowerCase();
+    const parsed = parsePaymentQR(raw);
+
+    let place = parsed.place || '';
+    let amount = parsed.amount || '';
+    let category = parsed.category || '❓ Otro';
+
+    // Si no encontró categoría explícita, intenta inferir por comercio/texto.
+    if (!category || category === '❓ Otro') {
+      Object.entries(CAT_RULES).forEach(([cat, words]) => {
+        if (words.some(w => decoded.includes(w) || String(place).toLowerCase().includes(w))) {
+          category = catLabel(cat);
+        }
+      });
+    }
+
+    return { place, amount, category: category || '❓ Otro' };
   }
   function updatePlace(v) {
     let category = form.category;
@@ -92,91 +225,45 @@ export default function Home() {
   }
 
   async function startCamera() {
-    setScreen('scan');
-    setCameraOn(true);
-
-    setTimeout(async () => {
-      try {
-        if (!window.Html5Qrcode) {
-          notify('Cargando lector QR. Esperá un segundo y probá de nuevo.');
-          setCameraOn(false);
-          return;
-        }
-
-        await stopCamera(false);
-
-        const scanner = new window.Html5Qrcode('qr-reader', { verbose: false });
-        qrScannerRef.current = scanner;
-
-        await scanner.start(
-          { facingMode: 'environment' },
-          {
-            fps: 12,
-            qrbox: (viewfinderWidth, viewfinderHeight) => {
-              const size = Math.floor(Math.min(viewfinderWidth, viewfinderHeight) * 0.72);
-              return { width: size, height: size };
-            },
-            aspectRatio: 1,
-            disableFlip: false
-          },
-          (decodedText) => {
-            stopCamera(false);
-            openConfirm(decodedText);
-          },
-          () => {}
-        );
-      } catch (err) {
-        console.error(err);
-        setCameraOn(false);
-        notify('No pude iniciar el lector QR. Probá subir imagen del QR.');
-      }
-    }, 250);
+    setScreen('scan'); setCameraOn(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      streamRef.current = stream;
+      videoRef.current.srcObject = stream;
+      await videoRef.current.play();
+      scanTick();
+    } catch { notify('Sin permiso de cámara. Probá subir imagen del QR.'); }
   }
-
-  async function stopCamera(goHome=false) {
+  function stopCamera(goHome=false) {
     if (loopRef.current) cancelAnimationFrame(loopRef.current);
-    loopRef.current = null;
-    setCameraOn(false);
-
-    if (qrScannerRef.current) {
-      const scanner = qrScannerRef.current;
-      qrScannerRef.current = null;
-      try {
-        if (scanner.isScanning) await scanner.stop();
-        await scanner.clear();
-      } catch (err) {
-        console.warn('QR scanner already stopped', err);
-      }
-    }
-
+    loopRef.current = null; setCameraOn(false);
     if (streamRef.current) streamRef.current.getTracks().forEach(t=>t.stop());
     streamRef.current = null;
     if (goHome) setScreen('home');
   }
-
-  async function readQRImage(file) {
+  function scanTick() {
+    const video = videoRef.current;
+    if (!video || !window.jsQR || video.readyState < 2) { loopRef.current = requestAnimationFrame(scanTick); return; }
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d'); ctx.drawImage(video, 0, 0);
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = window.jsQR(img.data, img.width, img.height);
+    if (code?.data) { stopCamera(false); openConfirm(code.data); }
+    else loopRef.current = requestAnimationFrame(scanTick);
+  }
+  function readQRImage(file) {
     if (!file) return;
-
-    try {
-      if (!window.Html5Qrcode) {
-        notify('Cargando lector QR. Esperá un segundo y probá de nuevo.');
-        return;
-      }
-
-      await stopCamera(false);
-
-      const fileScanner = new window.Html5Qrcode('qr-file-reader', { verbose: false });
-      const decodedText = await fileScanner.scanFile(file, true);
-      await fileScanner.clear();
-      openConfirm(decodedText);
-    } catch (err) {
-      console.error(err);
-      await stopCamera(false);
-      openConfirm('');
-      notify('No pude leer el QR. Cargalo manual.');
-    } finally {
-      if (fileRef.current) fileRef.current.value = '';
-    }
+    const img = new Image(); const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const canvas = document.createElement('canvas'); canvas.width = img.width; canvas.height = img.height;
+      const ctx = canvas.getContext('2d'); ctx.drawImage(img, 0, 0);
+      const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = window.jsQR?.(data.data, data.width, data.height);
+      URL.revokeObjectURL(url); stopCamera(false);
+      if (code?.data) openConfirm(code.data); else { openConfirm(''); notify('No pude leer el QR. Cargalo manual.'); }
+    };
+    img.src = url;
   }
   function buildExpense(methodOverride) {
     const amount = Number(String(form.amount).replace(',','.'));
@@ -252,11 +339,11 @@ export default function Home() {
   }, [expenses, settings, monthTotal, budgetPct, catTotals]);
 
   return <>
-    <Script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js" strategy="afterInteractive" />
+    <Script src="https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.min.js" strategy="afterInteractive" />
     <style>{`
       :root{--bg:#070707;--surface:#121212;--surface2:#1b1b1b;--ink:#f6f3ed;--muted:#a6a09a;--border:#2b2b2b;--orange:#ff6b2b;--green:#00d084;--red:#ff4d4d;--shadow:0 18px 60px rgba(0,0,0,.35)}
       *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif} button,input,select{font:inherit} .app{min-height:100dvh;padding:calc(env(safe-area-inset-top) + 18px) 18px 96px;background:radial-gradient(circle at 80% 0%,rgba(255,107,43,.18),transparent 30%),radial-gradient(circle at 0% 20%,rgba(0,208,132,.12),transparent 28%),var(--bg)}
-      .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}.brand{font-size:26px;font-weight:900;letter-spacing:-.06em}.brand span{color:var(--orange)}.iconbtn,.pillbtn{border:1px solid var(--border);background:var(--surface);color:var(--ink);border-radius:16px;padding:12px 14px;box-shadow:var(--shadow)}.hero{background:linear-gradient(135deg,#151515,#0f0f0f);border:1px solid var(--border);border-radius:28px;padding:24px;box-shadow:var(--shadow)}.label{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:800}.total{font-size:44px;font-weight:950;letter-spacing:-.08em;margin:5px 0}.muted{color:var(--muted);font-size:13px}.progress{height:9px;background:#252525;border-radius:99px;overflow:hidden;margin-top:16px}.progress div{height:100%;background:linear-gradient(90deg,var(--green),var(--orange));border-radius:99px}.scan{width:100%;margin:18px 0;border:0;border-radius:24px;background:var(--orange);color:white;padding:19px 20px;font-weight:900;font-size:18px;display:flex;justify-content:space-between;align-items:center;box-shadow:0 18px 40px rgba(255,107,43,.28)}.grid{display:grid;gap:12px}.card{background:rgba(18,18,18,.92);border:1px solid var(--border);border-radius:22px;padding:16px;box-shadow:var(--shadow)}.row{display:flex;align-items:center;justify-content:space-between;gap:10px}.expense{display:flex;gap:12px;align-items:center}.emoji{width:46px;height:46px;background:var(--surface2);border-radius:16px;display:grid;place-items:center;font-size:23px}.title{font-weight:850}.amount{font-weight:950}.small{font-size:12px;color:var(--muted)}.nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:rgba(7,7,7,.86);border-top:1px solid var(--border);backdrop-filter:blur(18px);padding:8px 0 calc(env(safe-area-inset-bottom) + 8px);z-index:10}.nav button{flex:1;background:transparent;color:var(--muted);border:0;padding:8px 4px;font-size:11px}.nav b{display:block;color:var(--ink);font-size:22px}.form{display:grid;gap:14px}.field label{display:block;margin-bottom:7px}.input{width:100%;background:var(--surface2);color:var(--ink);border:1px solid var(--border);border-radius:16px;padding:14px;outline:none}.chips{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.chip{border:1px solid var(--border);background:var(--surface2);color:var(--muted);border-radius:16px;padding:11px 6px}.chip.on{border-color:var(--orange);color:var(--orange);background:rgba(255,107,43,.1)}.primary{background:var(--green);color:#001b10;border:0;border-radius:18px;padding:16px;font-weight:950}.secondary{background:var(--surface2);color:var(--ink);border:1px solid var(--border);border-radius:18px;padding:15px;font-weight:800}.paygrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.paybtn{border:0;border-radius:18px;padding:15px 10px;color:white;display:grid;gap:4px;text-align:center;box-shadow:var(--shadow)}.paybtn b{font-size:13px}.paybtn span{font-size:11px;opacity:.82}.paybtn.mp{background:linear-gradient(135deg,#009ee3,#0069ff)}.paybtn.nx{background:linear-gradient(135deg,#ff6b2b,#00d084);color:#08100c}.danger{color:var(--red)}.videoBox{aspect-ratio:1;border-radius:28px;overflow:hidden;background:#000;position:relative;border:1px solid var(--border)}#qr-reader{width:100%;height:100%}#qr-reader video{width:100%!important;height:100%!important;object-fit:cover!important}#qr-reader__scan_region{height:100%}.frame{position:absolute;inset:20%;border:3px solid var(--orange);border-radius:24px;box-shadow:0 0 0 999px rgba(0,0,0,.35)}.filters{display:grid;grid-template-columns:1fr 1fr;gap:8px}.toast{position:fixed;left:50%;bottom:92px;transform:translateX(-50%);background:var(--ink);color:#111;padding:12px 18px;border-radius:99px;font-weight:800;z-index:30;white-space:nowrap}.barrow{display:grid;grid-template-columns:90px 1fr 75px;gap:10px;align-items:center;margin:10px 0}.bar{height:8px;border-radius:99px;background:#242424;overflow:hidden}.bar div{height:100%;background:var(--orange)}
+      .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}.brand{font-size:26px;font-weight:900;letter-spacing:-.06em}.brand span{color:var(--orange)}.iconbtn,.pillbtn{border:1px solid var(--border);background:var(--surface);color:var(--ink);border-radius:16px;padding:12px 14px;box-shadow:var(--shadow)}.hero{background:linear-gradient(135deg,#151515,#0f0f0f);border:1px solid var(--border);border-radius:28px;padding:24px;box-shadow:var(--shadow)}.label{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:800}.total{font-size:44px;font-weight:950;letter-spacing:-.08em;margin:5px 0}.muted{color:var(--muted);font-size:13px}.progress{height:9px;background:#252525;border-radius:99px;overflow:hidden;margin-top:16px}.progress div{height:100%;background:linear-gradient(90deg,var(--green),var(--orange));border-radius:99px}.scan{width:100%;margin:18px 0;border:0;border-radius:24px;background:var(--orange);color:white;padding:19px 20px;font-weight:900;font-size:18px;display:flex;justify-content:space-between;align-items:center;box-shadow:0 18px 40px rgba(255,107,43,.28)}.grid{display:grid;gap:12px}.card{background:rgba(18,18,18,.92);border:1px solid var(--border);border-radius:22px;padding:16px;box-shadow:var(--shadow)}.row{display:flex;align-items:center;justify-content:space-between;gap:10px}.expense{display:flex;gap:12px;align-items:center}.emoji{width:46px;height:46px;background:var(--surface2);border-radius:16px;display:grid;place-items:center;font-size:23px}.title{font-weight:850}.amount{font-weight:950}.small{font-size:12px;color:var(--muted)}.nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:rgba(7,7,7,.86);border-top:1px solid var(--border);backdrop-filter:blur(18px);padding:8px 0 calc(env(safe-area-inset-bottom) + 8px);z-index:10}.nav button{flex:1;background:transparent;color:var(--muted);border:0;padding:8px 4px;font-size:11px}.nav b{display:block;color:var(--ink);font-size:22px}.form{display:grid;gap:14px}.field label{display:block;margin-bottom:7px}.input{width:100%;background:var(--surface2);color:var(--ink);border:1px solid var(--border);border-radius:16px;padding:14px;outline:none}.chips{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.chip{border:1px solid var(--border);background:var(--surface2);color:var(--muted);border-radius:16px;padding:11px 6px}.chip.on{border-color:var(--orange);color:var(--orange);background:rgba(255,107,43,.1)}.primary{background:var(--green);color:#001b10;border:0;border-radius:18px;padding:16px;font-weight:950}.secondary{background:var(--surface2);color:var(--ink);border:1px solid var(--border);border-radius:18px;padding:15px;font-weight:800}.paygrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.paybtn{border:0;border-radius:18px;padding:15px 10px;color:white;display:grid;gap:4px;text-align:center;box-shadow:var(--shadow)}.paybtn b{font-size:13px}.paybtn span{font-size:11px;opacity:.82}.paybtn.mp{background:linear-gradient(135deg,#009ee3,#0069ff)}.paybtn.nx{background:linear-gradient(135deg,#ff6b2b,#00d084);color:#08100c}.danger{color:var(--red)}.videoBox{aspect-ratio:1;border-radius:28px;overflow:hidden;background:#000;position:relative;border:1px solid var(--border)}video{width:100%;height:100%;object-fit:cover}.frame{position:absolute;inset:20%;border:3px solid var(--orange);border-radius:24px;box-shadow:0 0 0 999px rgba(0,0,0,.35)}.filters{display:grid;grid-template-columns:1fr 1fr;gap:8px}.toast{position:fixed;left:50%;bottom:92px;transform:translateX(-50%);background:var(--ink);color:#111;padding:12px 18px;border-radius:99px;font-weight:800;z-index:30;white-space:nowrap}.barrow{display:grid;grid-template-columns:90px 1fr 75px;gap:10px;align-items:center;margin:10px 0}.bar{height:8px;border-radius:99px;background:#242424;overflow:hidden}.bar div{height:100%;background:var(--orange)}
     `}</style>
     <div className="app">
       {screen==='home' && <>
@@ -271,7 +358,7 @@ export default function Home() {
 
       {screen==='scan' && <>
         <div className="top"><button className="iconbtn" onClick={()=>stopCamera(true)}>←</button><div className="title">Escanear QR</div><span/></div>
-        <div className="videoBox"><div id="qr-reader"/><div className="frame"/></div><div id="qr-file-reader" style={{display:'none'}} />
+        <div className="videoBox"><video ref={videoRef} autoPlay playsInline muted/><div className="frame"/></div>
         <p className="muted" style={{textAlign:'center'}}>Apuntá al QR. Si no lee, subí una imagen.</p>
         <button className="secondary" style={{width:'100%'}} onClick={()=>fileRef.current.click()}>🖼️ Subir imagen del QR</button>
         <input ref={fileRef} type="file" accept="image/*" hidden onChange={e=>readQRImage(e.target.files?.[0])}/>
