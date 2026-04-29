@@ -688,6 +688,17 @@ export default function Home() {
         .barrow{display:grid;grid-template-columns:90px 1fr 75px;gap:10px;align-items:center;margin:10px 0}
         .bar{height:8px;border-radius:99px;background:#242424;overflow:hidden}
         .bar div{height:100%;background:var(--orange)}
+        .field{min-width:0;width:100%}
+        .field .input{width:100%;min-width:0;max-width:100%}
+        .input[type="date"]{width:100%;min-width:0;max-width:100%;overflow:hidden;-webkit-appearance:none;appearance:none;text-align:left}
+        .filters{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(0,1fr)!important;gap:12px!important;align-items:end}
+        .filters .field{min-width:0}
+        .filters .input{min-width:0;width:100%}
+        .card.form{overflow:hidden}
+        @media(max-width:420px){
+          .filters{grid-template-columns:1fr!important}
+        }
+
         .hint{margin-top:12px;text-align:center;line-height:1.45}
       `}</style>
 
