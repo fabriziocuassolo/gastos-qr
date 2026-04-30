@@ -622,26 +622,31 @@ export default function Home() {
 
   function openPaymentApp(app) {
     const cfg = app === 'nx'
-      ? { name: 'NaranjaX', scheme: 'nx://', fallback: 'https://app.naranjax.com/' }
+      ? { name: 'NaranjaX', scheme: 'nx:///', fallback: 'https://app.naranjax.com/' }
       : { name: 'Mercado Pago', scheme: 'mercadopago://', fallback: 'https://www.mercadopago.com.ar/' };
+
     notify('Abriendo ' + cfg.name + '…');
+
     let opened = false;
     const markOpened = () => { if (document.hidden) opened = true; };
     document.addEventListener('visibilitychange', markOpened);
+
+    // Importante: en iOS/PWA el deep link tiene que dispararse lo más cerca posible del click.
+    window.location.href = cfg.scheme;
+
     setTimeout(() => {
-      window.location.href = cfg.scheme;
-      setTimeout(() => {
-        document.removeEventListener('visibilitychange', markOpened);
-        if (!opened) window.location.href = cfg.fallback;
-      }, 1400);
-    }, 350);
+      document.removeEventListener('visibilitychange', markOpened);
+      if (!opened) window.location.href = cfg.fallback;
+    }, 1500);
   }
 
-  async function saveAndOpenPayment(app) {
+  function saveAndOpenPayment(app) {
     const method = app === 'nx' ? 'NaranjaX' : 'Mercado Pago';
     const item = buildExpense(method);
     if (!item) return;
-    await addExpense(item);
+
+    // No usamos await antes de abrir la app: iOS puede bloquear el deep link si se pierde el gesto del usuario.
+    addExpense(item).catch(() => notify('No se pudo guardar el gasto'));
     openPaymentApp(app);
     setTimeout(() => setScreen('home'), 500);
   }
