@@ -389,28 +389,22 @@ async function imageFileToDataUrl(file) {
   });
 }
 
-// Kuento Logo SVG component
+// Kuento Logo image component
 function KuentoLogo({ size = 32 }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect width="64" height="64" rx="14" fill="#112233"/>
-      <line x1="20" y1="14" x2="20" y2="50" stroke="url(#kGrad)" strokeWidth="5" strokeLinecap="round"/>
-      <path d="M20 32 L44 14" stroke="url(#kGrad)" strokeWidth="5" strokeLinecap="round"/>
-      <path d="M20 32 L38 50" stroke="url(#kGrad2)" strokeWidth="5" strokeLinecap="round"/>
-      <path d="M38 50 Q44 50 44 44 L44 38" stroke="url(#kGrad2)" strokeWidth="5" strokeLinecap="round" fill="none"/>
-      <polygon points="44,14 50,20 38,20" fill="#33FFCC"/>
-      <circle cx="20" cy="50" r="3" fill="#33EBC3"/>
-      <defs>
-        <linearGradient id="kGrad" x1="20" y1="14" x2="44" y2="14" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#33FFCC"/>
-          <stop offset="1" stopColor="#33EBC3"/>
-        </linearGradient>
-        <linearGradient id="kGrad2" x1="20" y1="32" x2="44" y2="50" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#33EBC3"/>
-          <stop offset="1" stopColor="#1db89a"/>
-        </linearGradient>
-      </defs>
-    </svg>
+    <img
+      src="/kuento-logo.png"
+      alt="Kuento"
+      width={size}
+      height={size}
+      style={{
+        width: size,
+        height: size,
+        borderRadius: Math.max(8, Math.round(size * 0.22)),
+        objectFit: 'cover',
+        display: 'block'
+      }}
+    />
   );
 }
 
@@ -886,7 +880,7 @@ export default function Home() {
           </button>
           <button style={{ width: "100%", border: "1px solid rgba(51,235,195,.2)", borderRadius: 16, padding: 15, fontWeight: 800, background: "#1f3647", color: "#fff", marginBottom: 10 }} onClick={async () => {
             const ok = await auth.resendVerification();
-            if (ok) notify('📩 Email reenviado');
+            if (ok) notify('📩 Email reenviado. Revisá spam o correo no deseado');
           }}>
             Reenviar correo de verificación
           </button>
@@ -1693,7 +1687,7 @@ export default function Home() {
               {!auth.user.emailVerified && auth.user.providerData?.some(provider => provider.providerId === 'password') && (
                 <button className="secondary" onClick={async () => {
                   const ok = await auth.resendVerification();
-                  if (ok) notify('📩 Email de verificación enviado');
+                  if (ok) notify('📩 Email de verificación enviado. Revisá spam o correo no deseado');
                 }}>
                   Reenviar verificación de email
                 </button>
@@ -1701,7 +1695,7 @@ export default function Home() {
 
               <button className="secondary" onClick={async () => {
                 const ok = await auth.resetPassword(auth.user.email);
-                if (ok) notify('📩 Email para restablecer contraseña enviado');
+                if (ok) notify('📩 Email para restablecer contraseña enviado. Revisá spam o correo no deseado');
               }}>
                 Restablecer contraseña
               </button>
