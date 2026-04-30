@@ -4,11 +4,60 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../lib/useAuth';
 import { useExpenses } from '../lib/useExpenses';
 import { LoginScreen } from '../lib/LoginScreen';
+import {
+  Utensils,
+  Car,
+  ShoppingCart,
+  HeartPulse,
+  Clapperboard,
+  Lightbulb,
+  Home as HomeIcon,
+  Dumbbell,
+  CircleHelp,
+  House,
+  ScanLine,
+  ClipboardList,
+  BarChart3,
+  UserRound,
+  MapPin,
+  Check,
+  CreditCard,
+  WalletCards,
+  AlertTriangle,
+  ArrowRight,
+  LockKeyhole,
+  Download,
+  RotateCcw,
+  LogOut
+} from 'lucide-react';
 
-const CATS = [
-  ['🍔','Comida'], ['🚗','Transporte'], ['🛒','Compras'], ['🏥','Salud'],
-  ['🎬','Ocio'], ['💡','Servicios'], ['🏠','Hogar'], ['💪','Gym'], ['❓','Otro']
-];
+const CATS = ['Comida', 'Transporte', 'Compras', 'Salud', 'Ocio', 'Servicios', 'Hogar', 'Gym', 'Otro'];
+
+const CATEGORY_ICONS = {
+  Comida: Utensils,
+  Transporte: Car,
+  Compras: ShoppingCart,
+  Salud: HeartPulse,
+  Ocio: Clapperboard,
+  Servicios: Lightbulb,
+  Hogar: HomeIcon,
+  Gym: Dumbbell,
+  Otro: CircleHelp
+};
+
+function categoryName(value = '') {
+  const clean = String(value || '')
+    .replace(/[🍔🚗🛒🏥🎬💡🏠💪❓]/gu, '')
+    .trim();
+
+  const hit = CATS.find(c => c.toLowerCase() === clean.toLowerCase());
+  return hit || 'Otro';
+}
+
+function CategoryIcon({ name, size = 22 }) {
+  const Icon = CATEGORY_ICONS[categoryName(name)] || CircleHelp;
+  return <Icon size={size} strokeWidth={2.4} />;
+}
 
 const CAT_RULES = {
   Comida: ['kiosco','panader','bar','cafe','café','resto','restaurant','mcdonald','burger','helado','pizzeria','pizza','comida','super','mercado'],
@@ -36,13 +85,96 @@ function monthKey(date = today()) {
   return String(date).slice(0, 7);
 }
 
+function toDateInputValue(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function startOfLocalDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function endOfMonth(year, monthIndex) {
+  return new Date(year, monthIndex + 1, 0);
+}
+
+function monthLabel(year, monthIndex) {
+  const d = new Date(year, monthIndex, 1);
+  return d.toLocaleDateString('es-AR', { month: 'long', year: 'numeric' });
+}
+
+function getPeriodOptions() {
+  const now = new Date();
+  const current = startOfLocalDay(now);
+
+  const day = current.getDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  const weekStart = new Date(current);
+  weekStart.setDate(current.getDate() + mondayOffset);
+
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekStart.getDate() + 6);
+
+  const monthStart = new Date(current.getFullYear(), current.getMonth(), 1);
+  const monthEnd = endOfMonth(current.getFullYear(), current.getMonth());
+
+  const last30Start = new Date(current);
+  last30Start.setDate(current.getDate() - 29);
+
+  const options = [
+    {
+      value: 'week',
+      label: 'Esta semana',
+      from: toDateInputValue(weekStart),
+      to: toDateInputValue(weekEnd)
+    },
+    {
+      value: 'month',
+      label: 'Este mes',
+      from: toDateInputValue(monthStart),
+      to: toDateInputValue(monthEnd)
+    },
+    {
+      value: 'last30',
+      label: 'Últimos 30 días',
+      from: toDateInputValue(last30Start),
+      to: toDateInputValue(current)
+    }
+  ];
+
+  for (let i = 0; i < 12; i++) {
+    const d = new Date(current.getFullYear(), current.getMonth() - i, 1);
+    const y = d.getFullYear();
+    const m = d.getMonth();
+    options.push({
+      value: `${y}-${String(m + 1).padStart(2, '0')}`,
+      label: monthLabel(y, m),
+      from: toDateInputValue(new Date(y, m, 1)),
+      to: toDateInputValue(endOfMonth(y, m))
+    });
+  }
+
+  return options;
+}
+
+function getYearsFromExpenses(expenses = []) {
+  const currentYear = new Date().getFullYear();
+  const years = new Set([currentYear, currentYear - 1]);
+  expenses.forEach(e => {
+    const y = Number(String(e.date || '').slice(0, 4));
+    if (Number.isFinite(y) && y > 2000) years.add(y);
+  });
+  return Array.from(years).sort((a, b) => b - a);
+}
+
+
 function catLabel(name) {
-  const clean = String(name || '').replace(/[^\p{L}\p{N}\s]/gu, '').trim().toLowerCase();
-  const hit = CATS.find(c =>
-    c[1].toLowerCase() === clean ||
-    `${c[0]} ${c[1]}`.toLowerCase() === String(name || '').toLowerCase()
-  );
-  return hit ? `${hit[0]} ${hit[1]}` : '❓ Otro';
+  const clean = String(name || '')
+    .replace(/[🍔🚗🛒🏥🎬💡🏠💪❓]/gu, '')
+    .trim()
+    .toLowerCase();
+
+  const hit = CATS.find(c => c.toLowerCase() === clean);
+  return hit || 'Otro';
 }
 
 function downloadFile(name, content, type) {
@@ -101,24 +233,84 @@ function normalizeAmount(v = '') {
 }
 
 function extractAmountFromText(text = '') {
-  const raw = String(text || '').replace(/\s+/g, ' ').replace(/[Oo]/g, '0');
-  const lines = String(text || '').split(/\n|\\n|\r/).map(l => l.trim()).filter(Boolean);
-  const priorityLines = lines.filter(l => /(total|monto|importe|pagar|cobrar|valor|amount)/i.test(l));
-  const linePatterns = [/\$?\s*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{1,2})?|[0-9]+(?:[.,][0-9]{1,2})?)/];
-  for (const line of priorityLines) {
-    for (const p of linePatterns) {
-      const m = line.match(p);
-      if (m) { const amount = normalizeAmount(m[1]); if (amount) return amount; }
+  const original = String(text || '');
+
+  // OCR suele confundir 0 con O/o/Q/D. Normalizamos antes de buscar montos.
+  const normalizedText = original
+    .replace(/[OoQ]/g, '0')
+    .replace(/(?<=\d)[D](?=\d|\b)/g, '0')
+    .replace(/[Il|]/g, '1')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const lines = original
+    .split(/\n|\\n|\r/)
+    .map(line => line
+      .replace(/[OoQ]/g, '0')
+      .replace(/(?<=\d)[D](?=\d|\b)/g, '0')
+      .replace(/[Il|]/g, '1')
+      .replace(/\s+/g, ' ')
+      .trim()
+    )
+    .filter(Boolean);
+
+  function cleanupAmountCandidate(value) {
+    return String(value || '')
+      .replace(/[OoQ]/g, '0')
+      .replace(/D/g, '0')
+      .replace(/[Il|]/g, '1')
+      .replace(/[^\d.,]/g, '');
+  }
+
+  function isReliableAmount(value) {
+    const cleaned = cleanupAmountCandidate(value);
+    const amount = normalizeAmount(cleaned);
+    if (!amount) return '';
+
+    const n = Number(amount);
+    if (!Number.isFinite(n) || n <= 0) return '';
+
+    return amount;
+  }
+
+  function pickFromContext(source) {
+    // Permite OCR imperfecto:
+    // "$ 256O" => 2560
+    // "Total 25O.OO" => 250.00
+    // "Importe 2.56O" => 2560 si el separador corresponde
+    // FIX OCR 2560: prioriza números de 4+ dígitos antes que tokens de 1-3 dígitos
+    const amountToken = '([0-9OoQDIl|]{4,}(?:[.,][0-9OoQDIl|]{1,2})?|[0-9OoQDIl|]{1,3}(?:[.,][0-9OoQDIl|]{3})+(?:[.,][0-9OoQDIl|]{1,2})?|[0-9OoQDIl|]{1,3}(?:[.,][0-9OoQDIl|]{1,2})?)';
+
+    const patterns = [
+      new RegExp('(?:total|monto|importe|pagar|cobrar|valor|amount)\\s*[:\\-]?\\s*\\$?\\s*' + amountToken, 'i'),
+      new RegExp('\\$\\s*' + amountToken, 'i')
+    ];
+
+    for (const pattern of patterns) {
+      const match = String(source || '').match(pattern);
+      if (match) {
+        const amount = isReliableAmount(match[1]);
+        if (amount) return amount;
+      }
+    }
+
+    return '';
+  }
+
+  // 1) Primero buscamos líneas confiables: "Total $ 2560", "$ 256O", "Monto 2.560", etc.
+  for (const line of lines) {
+    if (/(total|monto|importe|pagar|cobrar|valor|amount|\$)/i.test(line)) {
+      const amount = pickFromContext(line);
+      if (amount) return amount;
     }
   }
-  const patterns = [
-    /(?:total|monto|importe|pagar|cobrar|valor|amount)\s*[:\-]?\s*\$?\s*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{1,2})?|[0-9]+(?:[.,][0-9]{1,2})?)/i,
-    /\$\s*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{1,2})?|[0-9]+(?:[.,][0-9]{1,2})?)/i
-  ];
-  for (const p of patterns) {
-    const m = raw.match(p);
-    if (m) { const amount = normalizeAmount(m[1]); if (amount) return amount; }
-  }
+
+  // 2) Después buscamos en todo el texto, pero siempre con contexto.
+  const globalAmount = pickFromContext(normalizedText);
+  if (globalAmount) return globalAmount;
+
+  // 3) Si el OCR leyó solo números sueltos dentro del QR, no los usamos.
+  // Mejor dejar el campo vacío antes que cargar un monto falso.
   return '';
 }
 
@@ -236,14 +428,14 @@ export default function Home() {
 
   const [screen, setScreen] = useState('home');
   const [form, setForm] = useState({
-    amount: '', place: '', date: today(), category: '❓ Otro',
+    amount: '', place: '', date: today(), category: 'Otro',
     method: 'Manual', qrData: '', lat: null, lng: null
   });
   const [toast, setToast] = useState('');
   const [query, setQuery] = useState('');
   const [catFilter, setCatFilter] = useState('Todas');
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
+  const [periodFilter, setPeriodFilter] = useState('month');
+  const [selectedYear, setSelectedYear] = useState(String(new Date().getFullYear()));
   const [scanStatus, setScanStatus] = useState('Apuntá al QR incluyendo el monto visible de arriba si aparece.');
   const [ocrBusy, setOcrBusy] = useState(false);
 
@@ -264,16 +456,26 @@ export default function Home() {
 
   const thisMonth = useMemo(() => expenses.filter(e => monthKey(e.date) === monthKey()), [expenses]);
   const monthTotal = useMemo(() => thisMonth.reduce((s,e) => s + Number(e.amount||0), 0), [thisMonth]);
-  const budgetPct = settings.budget ? Math.min(100, Math.round(monthTotal / settings.budget * 100)) : 0;
+  const budgetPctRaw = settings.budget ? Math.round(monthTotal / settings.budget * 100) : 0;
+  const budgetPct = settings.budget ? Math.min(100, budgetPctRaw) : 0;
+  const isBudgetExceeded = Boolean(settings.budget && monthTotal > settings.budget);
+  const budgetExceededAmount = isBudgetExceeded ? monthTotal - settings.budget : 0;
+
+  const periodOptions = useMemo(() => getPeriodOptions(), []);
+  const periodRange = useMemo(
+    () => periodOptions.find(p => p.value === periodFilter) || periodOptions[1],
+    [periodOptions, periodFilter]
+  );
+  const availableYears = useMemo(() => getYearsFromExpenses(expenses), [expenses]);
 
   const filtered = useMemo(() => expenses.filter(e => {
     const q = query.toLowerCase().trim();
     const okQ = !q || [e.place,e.category,e.method].join(' ').toLowerCase().includes(q);
-    const okC = catFilter === 'Todas' || e.category.includes(catFilter);
-    const okF = !from || e.date >= from;
-    const okT = !to || e.date <= to;
+    const okC = catFilter === 'Todas' || categoryName(e.category) === catFilter;
+    const okF = !periodRange?.from || e.date >= periodRange.from;
+    const okT = !periodRange?.to || e.date <= periodRange.to;
     return okQ && okC && okF && okT;
-  }), [expenses, query, catFilter, from, to]);
+  }), [expenses, query, catFilter, periodRange]);
 
   const catTotals = useMemo(() => {
     const m = {};
@@ -283,12 +485,16 @@ export default function Home() {
 
   const insights = useMemo(() => {
     const arr = [];
-    if (settings.budget && monthTotal >= settings.budget * (settings.alertPct/100)) arr.push(`ALERTA: ya usaste ${budgetPct}% de tu presupuesto mensual.`);
-    if (catTotals[0]) arr.push(`Tu categoría más fuerte es ${catTotals[0][0]} con $${fmt(catTotals[0][1])}.`);
+    if (isBudgetExceeded) {
+      arr.push(`ALERTA: estás excedido por $${fmt(budgetExceededAmount)} de tu presupuesto mensual.`);
+    } else if (settings.budget && monthTotal >= settings.budget * (settings.alertPct/100)) {
+      arr.push(`ALERTA: ya usaste ${budgetPct}% de tu presupuesto mensual.`);
+    }
+    if (catTotals[0]) arr.push(`Tu categoría más fuerte es ${categoryName(catTotals[0][0])} con $${fmt(catTotals[0][1])}.`);
     const todayTotal = expenses.filter(e => e.date===today()).reduce((s,e) => s+Number(e.amount||0), 0);
     if (todayTotal) arr.push(`Hoy llevás gastado $${fmt(todayTotal)}.`);
     return arr.length ? arr : ['Todavía no hay suficientes datos para insights.'];
-  }, [expenses, settings, monthTotal, budgetPct, catTotals]);
+  }, [expenses, settings, monthTotal, budgetPct, catTotals, isBudgetExceeded, budgetExceededAmount]);
 
   function notify(msg) { setToast(msg); }
   function navigate(s) { stopCamera(false); setScreen(s); }
@@ -304,7 +510,7 @@ export default function Home() {
 
   function openManualExpense() {
     stopCamera(false);
-    setForm({ amount: '', place: '', date: today(), category: '❓ Otro', method: 'Manual', qrData: '', lat: null, lng: null });
+    setForm({ amount: '', place: '', date: today(), category: 'Otro', method: 'Manual', qrData: '', lat: null, lng: null });
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         pos => setForm(f => ({ ...f, lat: pos.coords.latitude, lng: pos.coords.longitude })),
@@ -451,15 +657,104 @@ export default function Home() {
   }
 
   function exportCSV() {
-    if (!expenses.length) return notify('No hay gastos');
-    const headers = ['Fecha','Lugar','Categoria','Monto','Metodo','Lat','Lng'];
-    const rows = expenses.map(e => [e.date,e.place,e.category,e.amount,e.method,e.lat||'',e.lng||'']);
-    const csv = [headers,...rows].map(r => r.map(v => '"' + String(v ?? '').replace(/"/g,'""') + '"').join(',')).join('\n');
-    downloadFile(`kuento-${today()}.csv`, '\uFEFF' + csv, 'text/csv;charset=utf-8');
+    return downloadBackupGastos();
+  }
+
+  function toCsvValue(value) {
+    return '"' + String(value ?? '').replace(/"/g, '""') + '"';
+  }
+
+  function csvLine(values) {
+    return values.map(toCsvValue).join(',');
+  }
+
+  function parseCSV(text = '') {
+    const rows = [];
+    let row = [];
+    let current = '';
+    let inQuotes = false;
+
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      const next = text[i + 1];
+
+      if (char === '"' && inQuotes && next === '"') {
+        current += '"';
+        i++;
+        continue;
+      }
+
+      if (char === '"') {
+        inQuotes = !inQuotes;
+        continue;
+      }
+
+      if (char === ',' && !inQuotes) {
+        row.push(current);
+        current = '';
+        continue;
+      }
+
+      if ((char === '\n' || char === '\r') && !inQuotes) {
+        if (char === '\r' && next === '\n') i++;
+        row.push(current);
+        rows.push(row);
+        row = [];
+        current = '';
+        continue;
+      }
+
+      current += char;
+    }
+
+    row.push(current);
+    rows.push(row);
+    return rows.filter(r => r.some(v => String(v || '').trim()));
+  }
+
+  function buildGastosCSV(list = expenses, meta = {}) {
+    const headers = ['Fecha', 'Lugar', 'Categoria', 'Monto', 'Metodo', 'Lat', 'Lng', 'Id'];
+    const rows = list.map(e => [
+      e.date || '',
+      e.place || '',
+      categoryName(e.category || 'Otro'),
+      e.amount || '',
+      e.method || 'Manual',
+      e.lat || '',
+      e.lng || '',
+      e.id || ''
+    ]);
+
+    return [
+      csvLine(['Kuento Backup Gastos']),
+      csvLine(['Version', '3']),
+      csvLine(['Exportado', new Date().toISOString()]),
+      csvLine(['Rango', meta.label || 'Todos los gastos']),
+      csvLine(['Total gastos', list.length]),
+      '',
+      csvLine(headers),
+      ...rows.map(csvLine)
+    ].join('\n');
+  }
+
+  function downloadBackupGastos() {
+    if (!expenses.length) return notify('No hay gastos para descargar');
+    const csv = buildGastosCSV(expenses, { label: 'Todos los gastos' });
+    downloadFile(`kuento-backup-gastos-${today()}.csv`, '\uFEFF' + csv, 'text/csv;charset=utf-8');
+  }
+
+  function downloadYearData(yearValue = selectedYear) {
+    const year = String(yearValue || selectedYear);
+    const list = expenses.filter(e => String(e.date || '').startsWith(year));
+    if (!list.length) return notify(`No hay gastos cargados para ${year}`);
+
+    const csv = buildGastosCSV(list, { label: `Gastos ${year}` });
+    downloadFile(`kuento-gastos-${year}.csv`, '\uFEFF' + csv, 'text/csv;charset=utf-8');
+    notify(`Gastos ${year} descargados`);
   }
 
   function backupJSON() {
-    downloadFile(`backup-kuento-${today()}.json`, JSON.stringify({ version: 2, exportedAt: new Date().toISOString(), settings, expenses }, null, 2), 'application/json');
+    return downloadBackupGastos();
   }
 
   async function saveBudgetSettings() {
@@ -467,19 +762,76 @@ export default function Home() {
     notify('✅ Presupuesto fijado correctamente');
   }
 
-  function restoreJSON(file) {
+  async function restoreBackupGastos(file) {
     if (!file) return;
+
     const r = new FileReader();
     r.onload = async () => {
       try {
-        const data = JSON.parse(r.result);
-        if (!Array.isArray(data.expenses)) throw Error();
-        for (const expense of data.expenses) await addExpense(expense);
-        if (data.settings) await saveSettings(data.settings);
-        notify('Backup restaurado');
-      } catch { notify('Backup inválido'); }
+        const text = String(r.result || '').replace(/^\uFEFF/, '').trim();
+
+        // Compatibilidad con backups viejos JSON.
+        if (text.startsWith('{')) {
+          const data = JSON.parse(text);
+          if (!Array.isArray(data.expenses)) throw Error();
+          for (const expense of data.expenses) await addExpense(expense);
+          notify('Backup de gastos restaurado');
+          return;
+        }
+
+        const rows = parseCSV(text);
+        const headerIndex = rows.findIndex(row =>
+          row.map(x => String(x || '').trim().toLowerCase()).includes('fecha') &&
+          row.map(x => String(x || '').trim().toLowerCase()).includes('lugar')
+        );
+
+        if (headerIndex === -1) throw Error();
+
+        const headers = rows[headerIndex].map(h => String(h || '').trim().toLowerCase());
+        const idx = name => headers.indexOf(name);
+
+        const iFecha = idx('fecha');
+        const iLugar = idx('lugar');
+        const iCategoria = idx('categoria');
+        const iMonto = idx('monto');
+        const iMetodo = idx('metodo');
+        const iLat = idx('lat');
+        const iLng = idx('lng');
+
+        let restored = 0;
+
+        for (const row of rows.slice(headerIndex + 1)) {
+          const amount = normalizeAmount(row[iMonto]);
+          const place = String(row[iLugar] || '').trim();
+          if (!amount || !place) continue;
+
+          await addExpense({
+            id: Date.now() + restored,
+            date: String(row[iFecha] || today()).trim() || today(),
+            place,
+            category: catLabel(row[iCategoria] || 'Otro'),
+            amount,
+            method: String(row[iMetodo] || 'Manual').trim() || 'Manual',
+            lat: iLat >= 0 ? row[iLat] || '' : '',
+            lng: iLng >= 0 ? row[iLng] || '' : ''
+          });
+
+          restored++;
+        }
+
+        if (!restored) throw Error();
+
+        notify(`${restored} gastos restaurados`);
+      } catch {
+        notify('Backup inválido');
+      }
     };
+
     r.readAsText(file);
+  }
+
+  function restoreJSON(file) {
+    return restoreBackupGastos(file);
   }
 
 
@@ -668,6 +1020,34 @@ export default function Home() {
           overflow: hidden;
           margin-bottom: 14px;
         }
+
+        .hero.budget-exceeded {
+          background: linear-gradient(145deg, rgba(255,87,87,0.20), rgba(255,87,87,0.08));
+          border-color: rgba(255,87,87,0.55);
+          box-shadow: 0 0 0 1px rgba(255,87,87,0.12), 0 18px 46px rgba(255,87,87,0.16);
+        }
+        .hero.budget-exceeded::before {
+          background: radial-gradient(circle, rgba(255,87,87,0.22), transparent 70%);
+        }
+        .hero.budget-exceeded .total {
+          color: #ff7070;
+          text-shadow: 0 0 18px rgba(255,87,87,0.25);
+        }
+        .budget-over-text {
+          margin-top: 10px;
+          padding: 10px 12px;
+          border-radius: 14px;
+          background: rgba(255,87,87,0.12);
+          border: 1px solid rgba(255,87,87,0.35);
+          color: #ff8585;
+          font-weight: 800;
+          font-size: 13px;
+        }
+        .budget-exceeded-list {
+          background: rgba(255,87,87,0.08);
+          border-color: rgba(255,87,87,0.35);
+        }
+
         .hero::before {
           content: '';
           position: absolute;
@@ -776,10 +1156,11 @@ export default function Home() {
           border-radius: 14px;
           display: grid;
           place-items: center;
-          font-size: 22px;
           flex-shrink: 0;
           border: 1px solid var(--border2);
+          color: var(--neon);
         }
+        .emoji svg { display: block; }
 
         .exp-title { font-weight: 700; font-size: 15px; color: var(--ink); }
         .exp-amount { font-weight: 900; font-size: 16px; color: var(--neon); letter-spacing: -0.03em; }
@@ -794,13 +1175,18 @@ export default function Home() {
           margin-bottom: 10px;
           font-size: 14px;
           color: var(--muted);
+          display: flex;
+          align-items: center;
+          gap: 10px;
         }
+        .insight-card svg { flex-shrink: 0; color: var(--neon); }
         .insight-card.alert {
           background: rgba(255,87,87,0.08);
           border-color: rgba(255,87,87,0.3);
           color: var(--ink);
         }
         .insight-card.alert strong { color: #ff7070; }
+        .insight-card.alert svg { color: #ff7070; }
 
         /* NAV */
         .nav {
@@ -826,7 +1212,8 @@ export default function Home() {
           font-family: inherit;
         }
         .nav button:hover { color: var(--accent); }
-        .nav b { display: block; font-size: 20px; margin-bottom: 2px; }
+        .nav b { display: flex; justify-content: center; margin-bottom: 2px; }
+        .nav svg { display: block; }
 
         /* FORM */
         .form { display: grid; gap: 14px; }
@@ -864,16 +1251,25 @@ export default function Home() {
           background: var(--bg2);
           color: var(--muted);
           border-radius: 14px;
-          padding: 10px 6px;
+          padding: 12px 6px;
           font-size: 13px;
           cursor: pointer;
           transition: border-color 0.2s, color 0.2s, background 0.2s;
+          display: grid;
+          place-items: center;
+          gap: 6px;
+          min-height: 82px;
+        }
+        .chip svg {
+          color: rgba(51,255,204,0.72);
+          filter: drop-shadow(0 0 6px rgba(51,255,204,0.12));
         }
         .chip.on {
           border-color: var(--accent);
           color: var(--neon);
           background: rgba(51,235,195,0.1);
         }
+        .chip.on svg { color: var(--neon); }
 
         /* PRIMARY BUTTON */
         .primary {
@@ -906,7 +1302,7 @@ export default function Home() {
           transition: transform 0.15s, opacity 0.15s;
         }
         .paybtn:active { transform: scale(0.97); }
-        .paybtn b { font-size: 13px; font-weight: 800; }
+        .paybtn b { font-size: 13px; font-weight: 800; display:flex; align-items:center; justify-content:center; gap:6px; }
         .paybtn span { font-size: 11px; opacity: 0.8; }
         .paybtn.mp { background: linear-gradient(135deg,#009ee3,#0069ff); }
         .paybtn.nx { background: linear-gradient(135deg,#ff6b2b,#ffaa00); color: #1a0900; }
@@ -1020,10 +1416,13 @@ export default function Home() {
               <button className="iconbtn" onClick={() => navigate('settings')}>⚙️</button>
             </div>
 
-            <div className="hero">
+            <div className={`hero ${isBudgetExceeded ? "budget-exceeded" : ""}`}>
               <div className="label">Gastos este mes</div>
               <div className="total">${fmt(monthTotal)}</div>
               <div className="muted">{thisMonth.length} registros · {settings.budget ? `$${fmt(settings.budget)} presupuesto` : 'sin presupuesto'}</div>
+              {isBudgetExceeded && (
+                <div className="budget-over-text">⚠️ Estás excedido por ${fmt(budgetExceededAmount)} de tu presupuesto</div>
+              )}
               {settings.budget > 0 && (
                 <div className="progress">
                   <div style={{ width: `${budgetPct}%` }} />
@@ -1032,20 +1431,20 @@ export default function Home() {
             </div>
 
             <button className="scan" onClick={startCamera}>
-              <span>📷 Escanear QR</span>
-              <span style={{ fontSize: 20 }}>→</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}><ScanLine size={22} /> Escanear QR</span>
+              <ArrowRight size={22} />
             </button>
 
             <button className="secondary" style={{ marginBottom: 16 }} onClick={openManualExpense}>
-              ✍️ Ingresar gasto manualmente
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><ClipboardList size={18} /> Ingresar gasto manualmente</span>
             </button>
 
             {insights.map((x, i) => {
               const isAlert = String(x).startsWith('ALERTA:');
               return (
                 <div className={`insight-card ${isAlert ? 'alert' : ''}`} key={i}>
-                  {isAlert ? '⚠️ ' : '💡 '}
-                  {isAlert ? <strong>{x}</strong> : x}
+                  {isAlert ? <AlertTriangle size={18} /> : <Lightbulb size={18} />}
+                  {isAlert ? <strong>{x}</strong> : <span>{x}</span>}
                 </div>
               );
             })}
@@ -1127,22 +1526,23 @@ export default function Home() {
               <div>
                 <div className="label" style={{ marginBottom: 8 }}>Categoría</div>
                 <div className="chips">
-                  {CATS.map(([em, n]) => (
-                    <button key={n} className={`chip ${form.category.includes(n) ? 'on' : ''}`} onClick={() => setForm({ ...form, category: `${em} ${n}` })}>
-                      {em}<br />{n}
+                  {CATS.map((n) => (
+                    <button key={n} className={`chip ${categoryName(form.category) === n ? 'on' : ''}`} onClick={() => setForm({ ...form, category: n })}>
+                      <CategoryIcon name={n} size={24} />
+                      <span>{n}</span>
                     </button>
                   ))}
                 </div>
               </div>
 
-              {form.lat && <div className="small">📍 Ubicación guardada</div>}
+              {form.lat && <div className="small" style={{ display: "flex", alignItems: "center", gap: 6 }}><MapPin size={14} /> Ubicación guardada</div>}
 
               <div className="paygrid">
                 <button className="paybtn mp" onClick={() => saveAndOpenPayment('mp')}>
-                  <b>💙 Mercado Pago</b><span>Guardar y abrir</span>
+                  <b><CreditCard size={18} /> Mercado Pago</b><span>Guardar y abrir</span>
                 </button>
                 <button className="paybtn nx" onClick={() => saveAndOpenPayment('nx')}>
-                  <b>🧡 NaranjaX</b><span>Guardar y abrir</span>
+                  <b><WalletCards size={18} /> NaranjaX</b><span>Guardar y abrir</span>
                 </button>
               </div>
 
@@ -1167,18 +1567,22 @@ export default function Home() {
                 <input className="input" placeholder="Buscar comercio o categoría…" value={query} onChange={e => setQuery(e.target.value)} />
                 <div className="filters">
                   <div className="field">
-                    <label className="label">Desde</label>
-                    <input className="input" type="date" value={from} onChange={e => setFrom(e.target.value)} />
+                    <label className="label">Período</label>
+                    <select className="input" value={periodFilter} onChange={e => setPeriodFilter(e.target.value)}>
+                      {periodOptions.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+                    </select>
                   </div>
                   <div className="field">
-                    <label className="label">Hasta</label>
-                    <input className="input" type="date" value={to} onChange={e => setTo(e.target.value)} />
+                    <label className="label">Categoría</label>
+                    <select className="input" value={catFilter} onChange={e => setCatFilter(e.target.value)}>
+                      <option>Todas</option>
+                      {CATS.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
                   </div>
                 </div>
-                <select className="input" value={catFilter} onChange={e => setCatFilter(e.target.value)}>
-                  <option>Todas</option>
-                  {CATS.map(c => <option key={c[1]}>{c[1]}</option>)}
-                </select>
+                <div className="small">
+                  Mostrando desde {periodRange?.from} hasta {periodRange?.to}
+                </div>
               </div>
             </div>
 
@@ -1199,7 +1603,7 @@ export default function Home() {
                 <div className="brand-icon"><KuentoLogo size={22} /></div>
                 <span className="brand-name" style={{ fontSize: 20 }}>Stats</span>
               </div>
-              <button className="iconbtn" onClick={exportCSV}>CSV</button>
+              <button className="iconbtn" onClick={downloadBackupGastos}>CSV</button>
             </div>
 
             <div className="hero" style={{ marginBottom: 12 }}>
@@ -1208,11 +1612,26 @@ export default function Home() {
               <div className="muted">{expenses.length} gastos registrados</div>
             </div>
 
+            {isBudgetExceeded && (
+              <div className="card budget-exceeded-list" style={{ marginBottom: 12 }}>
+                <div className="label" style={{ color: '#ff8585' }}>Presupuesto excedido</div>
+                <div style={{ fontWeight: 900, fontSize: 18, marginTop: 6 }}>⚠️ Te excediste por ${fmt(budgetExceededAmount)}</div>
+                <div className="small" style={{ marginTop: 6 }}>
+                  Presupuesto: ${fmt(settings.budget)} · Gastado este mes: ${fmt(monthTotal)}
+                </div>
+                {catTotals[0] && (
+                  <div className="small" style={{ marginTop: 8 }}>
+                    Mayor gasto acumulado: {categoryName(catTotals[0][0])} con ${fmt(catTotals[0][1])}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="card" style={{ marginBottom: 12 }}>
               <div className="label" style={{ marginBottom: 12 }}>Por categoría</div>
               {catTotals.map(([c, v]) => (
                 <div className="barrow" key={c}>
-                  <span className="small">{c}</span>
+                  <span className="small" style={{ display: 'flex', alignItems: 'center', gap: 6 }}><CategoryIcon name={c} size={14} /> {categoryName(c)}</span>
                   <div className="bar">
                     <div style={{ width: `${catTotals[0]?.[1] ? v/catTotals[0][1]*100 : 0}%` }} />
                   </div>
@@ -1222,10 +1641,9 @@ export default function Home() {
             </div>
 
             <div className="card form">
-              <button className="secondary" onClick={exportCSV}>📥 Descargar CSV</button>
-              <button className="secondary" onClick={backupJSON}>💾 Descargar backup JSON</button>
-              <button className="secondary" onClick={() => restoreRef.current.click()}>♻️ Restaurar backup</button>
-              <input hidden ref={restoreRef} type="file" accept="application/json" onChange={e => restoreJSON(e.target.files?.[0])} />
+              <button className="secondary" onClick={downloadBackupGastos}>Descargar backup gastos</button>
+              <button className="secondary" onClick={() => restoreRef.current.click()}>Restaurar backup gastos</button>
+              <input hidden ref={restoreRef} type="file" accept=".csv,.json,text/csv,application/json" onChange={e => restoreBackupGastos(e.target.files?.[0])} />
             </div>
           </>
         )}
@@ -1266,7 +1684,7 @@ export default function Home() {
                 <input className="input" inputMode="numeric" value={settings.alertPct} onChange={e => setSettings({ ...settings, alertPct: Number(e.target.value || 0) })} />
               </div>
 
-              <button className="primary" onClick={saveBudgetSettings}>✅ Guardar configuración</button>
+              <button className="primary" onClick={saveBudgetSettings}>Guardar configuración</button>
             </div>
 
             <div className="card form" style={{ marginBottom: 12 }}>
@@ -1285,7 +1703,7 @@ export default function Home() {
                 const ok = await auth.resetPassword(auth.user.email);
                 if (ok) notify('📩 Email para restablecer contraseña enviado');
               }}>
-                🔐 Restablecer contraseña
+                Restablecer contraseña
               </button>
 
               {auth.biometricOk && !auth.hasBiometric && (
@@ -1293,7 +1711,7 @@ export default function Home() {
                   const ok = await auth.enableBiometric();
                   if (ok) notify('✅ Face ID / Huella activado');
                 }}>
-                  🔒 Activar Face ID / Huella
+                  Activar Face ID / Huella
                 </button>
               )}
 
@@ -1304,12 +1722,27 @@ export default function Home() {
               )}
             </div>
 
+            <div className="card form" style={{ marginBottom: 12 }}>
+              <div className="label">Solicitar datos</div>
+              <div className="field">
+                <label className="label">Archivo anual</label>
+                <select className="input" value={selectedYear} onChange={e => setSelectedYear(e.target.value)}>
+                  {availableYears.map(y => <option key={y} value={String(y)}>Gastos {y}</option>)}
+                </select>
+              </div>
+              <button className="secondary" onClick={() => downloadYearData(selectedYear)}>
+                Descargar gastos {selectedYear}
+              </button>
+              <div className="small">
+                Se genera un archivo CSV compatible con Excel y también restaurable desde Kuento.
+              </div>
+            </div>
+
             <div className="card form">
               <div className="label">Datos</div>
-              <button className="secondary" onClick={exportCSV}>📥 Descargar CSV</button>
-              <button className="secondary" onClick={backupJSON}>💾 Descargar backup JSON</button>
-              <button className="secondary" onClick={() => restoreRef.current.click()}>♻️ Restaurar backup</button>
-              <input hidden ref={restoreRef} type="file" accept="application/json" onChange={e => restoreJSON(e.target.files?.[0])} />
+              <button className="secondary" onClick={downloadBackupGastos}>Descargar backup gastos</button>
+              <button className="secondary" onClick={() => restoreRef.current.click()}>Restaurar backup gastos</button>
+              <input hidden ref={restoreRef} type="file" accept=".csv,.json,text/csv,application/json" onChange={e => restoreBackupGastos(e.target.files?.[0])} />
               <button className="danger-btn" onClick={auth.logout}>Cerrar sesión</button>
             </div>
           </>
@@ -1320,11 +1753,11 @@ export default function Home() {
 
       {screen !== 'scan' && screen !== 'confirm' && (
         <nav className="nav">
-          <button onClick={() => navigate('home')}><b>🏠</b>Inicio</button>
-          <button onClick={startCamera}><b>📷</b>QR</button>
-          <button onClick={() => navigate('history')}><b>📋</b>Historial</button>
-          <button onClick={() => navigate('stats')}><b>📊</b>Stats</button>
-          <button onClick={() => navigate('settings')}><b>👤</b>Perfil</button>
+          <button onClick={() => navigate('home')}><b><House size={21} /></b>Inicio</button>
+          <button onClick={startCamera}><b><ScanLine size={21} /></b>QR</button>
+          <button onClick={() => navigate('history')}><b><ClipboardList size={21} /></b>Historial</button>
+          <button onClick={() => navigate('stats')}><b><BarChart3 size={21} /></b>Stats</button>
+          <button onClick={() => navigate('settings')}><b><UserRound size={21} /></b>Perfil</button>
         </nav>
       )}
     </>
@@ -1332,14 +1765,14 @@ export default function Home() {
 }
 
 function Expense({ e, del }) {
-  const emoji = String(e.category || '❓').split(' ')[0];
+  const name = categoryName(e.category || 'Otro');
   return (
     <div className="card row" onClick={() => del(e.id)} style={{ cursor: 'pointer' }}>
       <div className="expense">
-        <div className="emoji">{emoji}</div>
+        <div className="emoji"><CategoryIcon name={name} size={22} /></div>
         <div>
           <div className="exp-title">{e.place}</div>
-          <div className="small">{e.date} · {e.category} · {e.method || 'Manual'}</div>
+          <div className="small">{e.date} · {name} · {e.method || 'Manual'}</div>
         </div>
       </div>
       <div className="exp-amount">${fmt(e.amount)}</div>

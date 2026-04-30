@@ -3,6 +3,10 @@ export const metadata = {
   description: "Kuento - control de gastos con QR",
   manifest: "/manifest.json",
   themeColor: "#1A2F3C",
+  icons: {
+    icon: "/icon-512.png",
+    apple: "/apple-touch-icon.png",
+  },
 };
 
 export const viewport = {
