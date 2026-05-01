@@ -644,7 +644,9 @@ export default function Home() {
       amount: installmentAmount,
       place: installments > 1 ? `${basePlace} (cuota ${index + 1}/${installments})` : basePlace,
       originalPlace: basePlace,
-      date: addMonthsToDate(form.date, index),
+      // Tarjeta de crédito: la primera cuota impacta desde el mes siguiente.
+      // Manual/efectivo/debito: impacta en la fecha cargada.
+      date: addMonthsToDate(form.date, isCard ? index + 1 : index),
       method: methodOverride || form.method || 'Manual',
       isCard,
       installments,
@@ -1658,7 +1660,7 @@ export default function Home() {
                         const interes = form.hasInterest ? (Number(String(form.interestPct || '0').replace(',', '.')) || 0) : 0;
                         const total = base * (1 + interes / 100);
                         const cuota = cuotas ? total / cuotas : total;
-                        return `Se guardará como ${cuotas} cuota${cuotas > 1 ? 's' : ''} de $${fmt(cuota)}. Total: $${fmt(total)}.`;
+                        return `Se guardará desde el mes que viene como ${cuotas} cuota${cuotas > 1 ? 's' : ''} de $${fmt(cuota)}. Total: $${fmt(total)}.`;
                       })()}
                     </div>
                   </>
