@@ -85,6 +85,20 @@ function monthKey(date = today()) {
   return String(date).slice(0, 7);
 }
 
+function addMonthsToDate(dateStr, monthsToAdd = 0) {
+  const [y, m, d] = String(dateStr || today()).split('-').map(Number);
+  const baseYear = Number.isFinite(y) ? y : new Date().getFullYear();
+  const baseMonth = Number.isFinite(m) ? m - 1 : new Date().getMonth();
+  const baseDay = Number.isFinite(d) ? d : new Date().getDate();
+
+  const target = new Date(baseYear, baseMonth + monthsToAdd, 1);
+  const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  target.setDate(Math.min(baseDay, lastDay));
+
+  return target.toISOString().slice(0, 10);
+}
+
+
 function toDateInputValue(date) {
   return date.toISOString().slice(0, 10);
 }
@@ -423,7 +437,8 @@ export default function Home() {
   const [screen, setScreen] = useState('home');
   const [form, setForm] = useState({
     amount: '', place: '', date: today(), category: 'Otro',
-    method: 'Manual', qrData: '', lat: null, lng: null
+    method: 'Manual', qrData: '', lat: null, lng: null,
+    isCard: false, installments: '1', hasInterest: false, interestPct: ''
   });
   const [toast, setToast] = useState('');
   const [query, setQuery] = useState('');
@@ -504,7 +519,7 @@ export default function Home() {
 
   function openManualExpense() {
     stopCamera(false);
-    setForm({ amount: '', place: '', date: today(), category: 'Otro', method: 'Manual', qrData: '', lat: null, lng: null });
+    setForm({ amount: '', place: '', date: today(), category: 'Otro', method: 'Manual', qrData: '', lat: null, lng: null, isCard: false, installments: '1', hasInterest: false, interestPct: '' });
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         pos => setForm(f => ({ ...f, lat: pos.coords.latitude, lng: pos.coords.longitude })),
@@ -534,7 +549,7 @@ export default function Home() {
 
   async function openConfirm(qrData = '', imageDataUrl = '') {
     const guess = inferFromText(qrData);
-    setForm({ amount: guess.amount || '', place: guess.place || '', date: today(), category: guess.category || '❓ Otro', method: 'Manual', qrData, lat: null, lng: null });
+    setForm({ amount: guess.amount || '', place: guess.place || '', date: today(), category: guess.category || 'Otro', method: 'Manual', qrData, lat: null, lng: null, isCard: false, installments: '1', hasInterest: false, interestPct: '' });
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         pos => setForm(f => ({ ...f, lat: pos.coords.latitude, lng: pos.coords.longitude })),
@@ -605,24 +620,52 @@ export default function Home() {
     }
   }
 
-  function buildExpense(methodOverride) {
+  function buildExpenseItems(methodOverride) {
     const amount = Number(String(form.amount).replace(',', '.'));
     if (!amount || amount <= 0) { notify('Ingresá un monto válido'); return null; }
     if (!form.place.trim()) { notify('Ingresá el comercio/lugar'); return null; }
-    return { ...form, id: Date.now(), amount, place: form.place.trim(), method: methodOverride || form.method || 'Manual' };
+
+    const isCard = Boolean(form.isCard);
+    const installments = isCard
+      ? Math.max(1, Math.min(60, Number.parseInt(form.installments || '1', 10) || 1))
+      : 1;
+    const interestPct = isCard && form.hasInterest
+      ? Math.max(0, Number(String(form.interestPct || '0').replace(',', '.')) || 0)
+      : 0;
+
+    const totalWithInterest = amount * (1 + interestPct / 100);
+    const installmentAmount = Number((totalWithInterest / installments).toFixed(2));
+    const basePlace = form.place.trim();
+    const now = Date.now();
+
+    return Array.from({ length: installments }, (_, index) => ({
+      ...form,
+      id: now + index,
+      amount: installmentAmount,
+      place: installments > 1 ? `${basePlace} (cuota ${index + 1}/${installments})` : basePlace,
+      originalPlace: basePlace,
+      date: addMonthsToDate(form.date, index),
+      method: methodOverride || form.method || 'Manual',
+      isCard,
+      installments,
+      installmentNumber: index + 1,
+      totalAmount: Number(totalWithInterest.toFixed(2)),
+      amountWithoutInterest: amount,
+      interestPct
+    }));
   }
 
   async function saveExpense() {
-    const item = buildExpense('Manual');
-    if (!item) return;
-    await addExpense(item);
-    notify('Gasto guardado');
+    const items = buildExpenseItems('Manual');
+    if (!items) return;
+    await Promise.all(items.map(item => addExpense(item)));
+    notify(items.length > 1 ? `Gasto guardado en ${items.length} cuotas` : 'Gasto guardado');
     setScreen('home');
   }
 
   function openPaymentApp(app) {
     const cfg = app === 'nx'
-      ? { name: 'NaranjaX', scheme: 'nx:///', fallback: 'https://app.naranjax.com/' }
+      ? { name: 'NaranjaX', scheme: 'naranjax:///', fallback: 'https://app.naranjax.com/' }
       : { name: 'Mercado Pago', scheme: 'mercadopago://', fallback: 'https://www.mercadopago.com.ar/' };
 
     notify('Abriendo ' + cfg.name + '…');
@@ -642,11 +685,11 @@ export default function Home() {
 
   function saveAndOpenPayment(app) {
     const method = app === 'nx' ? 'NaranjaX' : 'Mercado Pago';
-    const item = buildExpense(method);
-    if (!item) return;
+    const items = buildExpenseItems(method);
+    if (!items) return;
 
     // No usamos await antes de abrir la app: iOS puede bloquear el deep link si se pierde el gesto del usuario.
-    addExpense(item).catch(() => notify('No se pudo guardar el gasto'));
+    Promise.all(items.map(item => addExpense(item))).catch(() => notify('No se pudo guardar el gasto'));
     openPaymentApp(app);
     setTimeout(() => setScreen('home'), 500);
   }
@@ -712,13 +755,18 @@ export default function Home() {
   }
 
   function buildGastosCSV(list = expenses, meta = {}) {
-    const headers = ['Fecha', 'Lugar', 'Categoria', 'Monto', 'Metodo', 'Lat', 'Lng', 'Id'];
+    const headers = ['Fecha', 'Lugar', 'Categoria', 'Monto', 'Metodo', 'Tarjeta', 'Cuota', 'Cuotas', 'Total', 'InteresPct', 'Lat', 'Lng', 'Id'];
     const rows = list.map(e => [
       e.date || '',
       e.place || '',
       categoryName(e.category || 'Otro'),
       e.amount || '',
       e.method || 'Manual',
+      e.isCard ? 'Sí' : 'No',
+      e.installmentNumber || '',
+      e.installments || '',
+      e.totalAmount || '',
+      e.interestPct || '',
       e.lat || '',
       e.lng || '',
       e.id || ''
@@ -794,6 +842,11 @@ export default function Home() {
         const iCategoria = idx('categoria');
         const iMonto = idx('monto');
         const iMetodo = idx('metodo');
+        const iTarjeta = idx('tarjeta');
+        const iCuota = idx('cuota');
+        const iCuotas = idx('cuotas');
+        const iTotal = idx('total');
+        const iInteres = idx('interespct');
         const iLat = idx('lat');
         const iLng = idx('lng');
 
@@ -811,6 +864,11 @@ export default function Home() {
             category: catLabel(row[iCategoria] || 'Otro'),
             amount,
             method: String(row[iMetodo] || 'Manual').trim() || 'Manual',
+            isCard: iTarjeta >= 0 ? String(row[iTarjeta] || '').toLowerCase().startsWith('s') : false,
+            installmentNumber: iCuota >= 0 ? Number(row[iCuota] || 0) || '' : '',
+            installments: iCuotas >= 0 ? Number(row[iCuotas] || 0) || '' : '',
+            totalAmount: iTotal >= 0 ? Number(row[iTotal] || 0) || '' : '',
+            interestPct: iInteres >= 0 ? Number(row[iInteres] || 0) || 0 : 0,
             lat: iLat >= 0 ? row[iLat] || '' : '',
             lng: iLng >= 0 ? row[iLng] || '' : ''
           });
@@ -1520,6 +1578,91 @@ export default function Home() {
               <div className="field">
                 <label className="label">Fecha</label>
                 <input className="input" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
+              </div>
+
+              <div className="card" style={{ boxShadow: 'none', background: 'rgba(255,255,255,0.025)', padding: 14 }}>
+                <div className="label" style={{ marginBottom: 10 }}>Pago con tarjeta</div>
+
+                <div className="filters">
+                  <div className="field">
+                    <label className="label">¿Es un gasto con tarjeta?</label>
+                    <select
+                      className="input"
+                      value={form.isCard ? 'si' : 'no'}
+                      onChange={e => setForm({
+                        ...form,
+                        isCard: e.target.value === 'si',
+                        installments: e.target.value === 'si' ? form.installments || '1' : '1',
+                        hasInterest: e.target.value === 'si' ? form.hasInterest : false,
+                        interestPct: e.target.value === 'si' ? form.interestPct : ''
+                      })}
+                    >
+                      <option value="no">No</option>
+                      <option value="si">Sí</option>
+                    </select>
+                  </div>
+
+                  {form.isCard && (
+                    <div className="field">
+                      <label className="label">Cantidad de cuotas</label>
+                      <input
+                        className="input"
+                        type="number"
+                        min="1"
+                        max="60"
+                        inputMode="numeric"
+                        value={form.installments}
+                        onChange={e => setForm({ ...form, installments: e.target.value || '1' })}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {form.isCard && (
+                  <>
+                    <div className="filters">
+                      <div className="field">
+                        <label className="label">¿Tiene interés?</label>
+                        <select
+                          className="input"
+                          value={form.hasInterest ? 'si' : 'no'}
+                          onChange={e => setForm({
+                            ...form,
+                            hasInterest: e.target.value === 'si',
+                            interestPct: e.target.value === 'si' ? form.interestPct : ''
+                          })}
+                        >
+                          <option value="no">No</option>
+                          <option value="si">Sí</option>
+                        </select>
+                      </div>
+
+                      {form.hasInterest && (
+                        <div className="field">
+                          <label className="label">% de interés total</label>
+                          <input
+                            className="input"
+                            inputMode="decimal"
+                            placeholder="Ej: 20"
+                            value={form.interestPct}
+                            onChange={e => setForm({ ...form, interestPct: e.target.value })}
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="small">
+                      {(() => {
+                        const base = Number(String(form.amount || '0').replace(',', '.')) || 0;
+                        const cuotas = Math.max(1, Number.parseInt(form.installments || '1', 10) || 1);
+                        const interes = form.hasInterest ? (Number(String(form.interestPct || '0').replace(',', '.')) || 0) : 0;
+                        const total = base * (1 + interes / 100);
+                        const cuota = cuotas ? total / cuotas : total;
+                        return `Se guardará como ${cuotas} cuota${cuotas > 1 ? 's' : ''} de $${fmt(cuota)}. Total: $${fmt(total)}.`;
+                      })()}
+                    </div>
+                  </>
+                )}
               </div>
 
               <div>
