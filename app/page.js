@@ -1592,7 +1592,7 @@ export default function Home() {
                       onChange={e => setForm({
                         ...form,
                         isCard: e.target.value === 'si',
-                        installments: e.target.value === 'si' ? form.installments || '1' : '1',
+                        installments: e.target.value === 'si' ? (form.installments ?? '1') : '1',
                         hasInterest: e.target.value === 'si' ? form.hasInterest : false,
                         interestPct: e.target.value === 'si' ? form.interestPct : ''
                       })}
@@ -1612,7 +1612,7 @@ export default function Home() {
                         max="60"
                         inputMode="numeric"
                         value={form.installments}
-                        onChange={e => setForm({ ...form, installments: e.target.value || '1' })}
+                        onChange={e => setForm({ ...form, installments: e.target.value })}
                       />
                     </div>
                   )}
